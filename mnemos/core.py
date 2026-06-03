@@ -343,7 +343,7 @@ class Mnemos:
         # Tier 1-only mode: treat every vec-gated candidate as contradicts.
         # This is the honest path for users who explicitly opt out of
         # rerank: pick mode=vec. The `rerank` and `llm` modes require
-        # the cross-encoder by design — it's the component that makes
+        # the cross-encoder by design - it's the component that makes
         # the `relates` silent-link refinement possible. If a caller
         # sets mode=rerank with MNEMOS_ENABLE_RERANK=0 we let rerank()
         # fail (it will throw or return empty), and `_detect_contradictions`
@@ -594,7 +594,7 @@ class Mnemos:
                     )
                     r["snippet"] = True
                 # else: content is already short enough, no modification
-                # — `snippet` flag is not set
+                # - `snippet` flag is not set
 
         # Linked memory expansion: fold linked memories as summaries into
         # each result. BFS traversal up to `linked_depth` hops, with cycle
@@ -621,7 +621,7 @@ class Mnemos:
                     if dist >= linked_depth:
                         continue
                     # For nodes beyond the initial result set, we haven't
-                    # fetched their links yet — fetch lazily on first visit
+                    # fetched their links yet - fetch lazily on first visit
                     if node_id not in local_link_cache:
                         try:
                             newlinks = self.store.get_links([node_id])
@@ -634,7 +634,7 @@ class Mnemos:
                             continue
                         visited.add(lid)
                         # Skip linking to something already in the top-level
-                        # result set — callers already have it, don't double
+                        # result set - callers already have it, don't double
                         if lid in already_in_results:
                             continue
                         collected.append({
@@ -774,7 +774,7 @@ class Mnemos:
         return self.store.stats()
 
     # Stop words for query-token extraction when scoring vec-only snippet
-    # fallback. Tiny list — we want to keep "python", "vec", etc. but drop
+    # fallback. Tiny list - we want to keep "python", "vec", etc. but drop
     # noise like "the", "is", "and". Not a full stopword lexicon on purpose:
     # this runs inline per-hit, cost matters more than perfect recall.
     _SNIPPET_STOPWORDS = frozenset([
@@ -911,7 +911,7 @@ class Mnemos:
             # Word-boundary tag match: wrap both the stored tags CSV and the
             # search pattern with commas so the LIKE query only matches the
             # intended tag atom. Previous `LIKE '%foo%'` matched tags like
-            # 'unnamed' when user asked for 'name' — substring leak.
+            # 'unnamed' when user asked for 'name' - substring leak.
             where += " AND (',' || tags || ',') LIKE ?"
             params.append(f"%,{tags},%")
 

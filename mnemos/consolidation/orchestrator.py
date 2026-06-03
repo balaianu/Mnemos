@@ -46,10 +46,20 @@ def _migrate_nyx_schema(conn):
             clusters_merged INTEGER DEFAULT 0,
             memories_archived INTEGER DEFAULT 0,
             memories_created INTEGER DEFAULT 0,
+            access_decayed INTEGER DEFAULT 0,
+            importance_demoted INTEGER DEFAULT 0,
             details TEXT DEFAULT '',
             phase_details TEXT DEFAULT '{}'
         )
     """)
+    # Backfill the v10.5.0 bookkeeping columns on DBs whose consolidation_log
+    # predates them. SQLite has no ADD COLUMN IF NOT EXISTS, so the swallowed
+    # retry is the idempotency. Lets SQL-only runs log decay/demote counts.
+    for _col in ("access_decayed", "importance_demoted"):
+        try:
+            conn.execute(f"ALTER TABLE consolidation_log ADD COLUMN {_col} INTEGER DEFAULT 0")
+        except Exception:
+            pass
     conn.execute("""
         CREATE TABLE IF NOT EXISTS nyx_state (
             key TEXT PRIMARY KEY,
@@ -271,18 +281,34 @@ def run_nyx_cycle(
 
     phase_stats = {}
 
+    # Last-run timestamp: needed by Phase 1 triage and recorded by the audit
+    # log. Hoisted out of the LLM block so triage can run without an LLM.
+    last_run = conn.execute(
+        "SELECT MAX(run_at) FROM consolidation_log"
+    ).fetchone()[0]
+    log(f"Last run: {last_run or 'never'}")
+
+    # Surge/new-id state. Populated by Phase 1 if it runs, consumed by Phase 5.
+    new_ids = []
+    is_surge = surge
+
+    # --- Phase 1: Triage (pure SQL, no LLM required, runs standalone) ---
+    # Detect memories created since the last run and decide surge mode. Lives
+    # outside the LLM block so SQL-only runs still triage, not just Phase 6.
+    if 1 in phases:
+        from .phases import load_memory_meta, phase_triage
+        meta = load_memory_meta(conn, project=project)
+        new_ids, surge_detected = phase_triage(conn, meta, last_run)
+        is_surge = is_surge or surge_detected
+        phase_stats["phase1"] = {"new_memories": len(new_ids), "surge": is_surge}
+
     # --- LLM-dependent phases ---
     if phases & llm_phases:
         from .phases import (
-            load_embeddings, phase_triage, phase_dedup,
+            load_embeddings, phase_dedup,
             phase_weave, phase_contradict, phase_synthesize,
             _is_nyx_generated,
         )
-
-        last_run = conn.execute(
-            "SELECT MAX(run_at) FROM consolidation_log"
-        ).fetchone()[0]
-        log(f"Last run: {last_run or 'never'}")
 
         log("Loading embeddings...")
         all_embeddings, mergeable_embeddings, mem_by_id = load_embeddings(
@@ -292,11 +318,6 @@ def run_nyx_cycle(
         if len(all_embeddings) < 2:
             log(f"Only {len(all_embeddings)} embeddings, need >=2 for clustering. Skipping LLM phases.")
         else:
-            new_ids = []
-            is_surge = surge
-            if 1 in phases:
-                new_ids, surge_detected = phase_triage(conn, mem_by_id, last_run)
-                is_surge = is_surge or surge_detected
 
             # Phase 0.5: Cemelify (v10.4.0). Rewrites prose-form active
             # memories into CML before clustering, so Dedup operates on
@@ -370,12 +391,15 @@ def run_nyx_cycle(
 
     if execute:
         p1 = phase_stats.get("phase2", {})
+        p6 = phase_stats.get("phase6", {})
         try:
             store.log_consolidation_run(
                 clusters_found=p1.get("tight_found", 0) + p1.get("topic_found", 0),
                 clusters_merged=p1.get("tight_merged", 0) + p1.get("topic_merged", 0),
                 memories_archived=p1.get("archived", 0),
                 memories_created=p1.get("created", 0),
+                access_decayed=p6.get("access_decayed", 0),
+                importance_demoted=p6.get("importance_demoted", 0),
                 details=f"mnemos-nyx-cycle, phases={sorted(phases)}",
                 phase_details=json.dumps(phase_stats, default=str),
             )

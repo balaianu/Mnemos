@@ -335,7 +335,7 @@ def merge_cluster(cluster_ids, mem_by_id):
                 merged = re.sub(r"\n?```$", "", merged).strip()
             else:
                 # LLM call failed (returned None/empty). Fall back to raw
-                # concatenation so nothing is lost — but LOG IT so debugging
+                # concatenation so nothing is lost, but LOG IT so debugging
                 # doesn't have to guess why a merged memory is suddenly
                 # twice the expected size. Previously this was silent; a
                 # persistent LLM outage would inflate merged memories
@@ -389,7 +389,7 @@ def apply_merge(conn, cluster_ids, merged_content, mem_by_id):
     # Atomic merge: INSERT new memory + UPDATE archive sources + INSERT
     # embedding all go in one transaction. If embedding fails we ROLLBACK
     # the whole thing so the DB never contains an unembeddable merged
-    # memory without its sources — previously we committed the merge
+    # memory without its sources; previously we committed the merge
     # first, then tried to embed, and a failure there left orphans that
     # only `doctor --migrate` could later notice. One-transaction keeps
     # the invariant that every active memory has an embedding in the
@@ -462,6 +462,24 @@ def phase_triage(conn, mem_by_id, last_run_at):
         f"{' (SURGE MODE)' if is_surge else ''}")
 
     return new_ids, is_surge
+
+
+def load_memory_meta(conn, project=None):
+    """Lightweight metadata for Phase 1 triage: id, status and created_at of
+    active memories, with no embeddings loaded. Mirrors load_embeddings' active
+    (+ optional project) filter so triage sees the same memory set whether or
+    not the LLM phases run, which lets Phase 1 run standalone in SQL-only mode.
+    """
+    where = "status = 'active'"
+    params = []
+    if project:
+        where += " AND project = ?"
+        params.append(project)
+    rows = conn.execute(
+        f"SELECT id, status, created_at FROM memories WHERE {where} ORDER BY id",
+        params,
+    ).fetchall()
+    return {r["id"]: {"status": r["status"], "created_at": r["created_at"]} for r in rows}
 
 
 # =============================================================================
@@ -839,7 +857,7 @@ def phase_contradict(conn, mergeable_embeddings, mem_by_id, is_surge, execute=Fa
 
         elif classification == "EVOLVED":
             # Mark the older memory's valid_until so `valid_only=True`
-            # searches exclude it — the newer memory supersedes it
+            # searches exclude it; the newer memory supersedes it
             # temporally. Without this, both stay active and ranking
             # treats them as equally current. Use today's date as a
             # best-effort approximation; the LLM classification was

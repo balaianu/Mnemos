@@ -17,8 +17,11 @@ Storage backend is configurable via environment:
 import json
 import os
 import sys
+import threading
+import time
 
 from .core import Mnemos
+from . import _resource
 from .constants import (
     DEFAULT_PROJECTS, VALID_TYPES, VALID_LAYERS, DEFAULT_NAMESPACE,
     CML_MODE, DEFAULT_TOOL_USAGE_LOG,
@@ -315,6 +318,23 @@ def main():
 
     mnemos = build_mnemos()
 
+    # Optional idle-unload reaper. Only starts when MNEMOS_MODEL_IDLE_TTL > 0;
+    # on a memory-constrained host it returns embedder/reranker RSS to the OS
+    # after they sit idle. No thread, and no effect, by default.
+    if _resource.IDLE_TTL > 0:
+        from . import embed as _embed_mod
+        from . import rerank as _rerank_mod
+
+        def _reaper():
+            while True:
+                time.sleep(60)
+                _embed_mod.maybe_unload()
+                _rerank_mod.maybe_unload()
+
+        threading.Thread(target=_reaper, daemon=True, name="mnemos-model-reaper").start()
+        sys.stderr.write(f"Mnemos: idle model reaper on (TTL {_resource.IDLE_TTL}s)\n")
+        sys.stderr.flush()
+
     while True:
         msg = read_msg()
         if msg is None:
@@ -336,23 +356,26 @@ def main():
                     "serverInfo": {"name": "mnemos", "version": "10.3.10"},
                 },
             })
-            # Warm up the embedder so first search is instant
-            try:
-                from .embed import embed
-                embed(["warmup"], prefix="query")
-                sys.stderr.write("Mnemos: e5-large model loaded\n")
-                sys.stderr.flush()
-            except Exception as e:
-                sys.stderr.write(f"Mnemos: embedder warmup failed: {e}\n")
-            # Warm up the reranker only if rerank is enabled
-            if mnemos.enable_rerank:
+            # Warm up the models so the first search is instant. Eager by
+            # default (current behaviour); set MNEMOS_EAGER_WARMUP=0 on a
+            # memory-constrained host to load lazily on first use instead.
+            if os.environ.get("MNEMOS_EAGER_WARMUP", "1") == "1":
                 try:
-                    from .rerank import rerank
-                    rerank("warmup", [{"id": 0, "text": "warmup document"}])
-                    sys.stderr.write("Mnemos: jina reranker loaded\n")
+                    from .embed import embed
+                    embed(["warmup"], prefix="query")
+                    sys.stderr.write("Mnemos: e5-large model loaded\n")
                     sys.stderr.flush()
                 except Exception as e:
-                    sys.stderr.write(f"Mnemos: reranker warmup failed: {e}\n")
+                    sys.stderr.write(f"Mnemos: embedder warmup failed: {e}\n")
+                # Warm up the reranker only if rerank is enabled
+                if mnemos.enable_rerank:
+                    try:
+                        from .rerank import rerank
+                        rerank("warmup", [{"id": 0, "text": "warmup document"}])
+                        sys.stderr.write("Mnemos: jina reranker loaded\n")
+                        sys.stderr.flush()
+                    except Exception as e:
+                        sys.stderr.write(f"Mnemos: reranker warmup failed: {e}\n")
 
         elif method == "tools/list":
             send_msg({"jsonrpc": "2.0", "id": id_, "result": {"tools": TOOL_DEFINITIONS}})

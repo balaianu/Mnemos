@@ -174,6 +174,7 @@ Mnemos is CPU-only but loads real ONNX models into RAM. Summary:
 
 - **With reranker (default):** ~1.5-1.7 GB resident. Canonical configuration, benchmark numbers reported on this.
 - **Without reranker (`MNEMOS_ENABLE_RERANK=0`):** ~1-1.2 GB resident. Runs on a 2 GB+ Raspberry Pi. Trades ~0.5 pp of R@5 for ~500 MB less RAM.
+- **Idle unload (`MNEMOS_MODEL_IDLE_TTL=<seconds>`, v10.5.0):** a background reaper drops the embedder and reranker after they sit idle that long and returns the resident RAM above to the OS, so a mostly-idle server falls back toward ~100 MB between queries instead of holding the model indefinitely. The next query reloads (a one-off cost, roughly 1-2 s on a fast CPU, more on small hardware). Pair with `MNEMOS_EAGER_WARMUP=0` to also skip the startup load, and `MNEMOS_MIN_FREE_MB=<floor>` to refuse loading under memory pressure (search degrades to vec-only then FTS5 instead of risking an OOM). All default off.
 - **Disk:** ~800 MB total for both ONNX models (e5-large embedder + Jina cross-encoder), downloaded once on first use and cached under `~/.cache/fastembed`.
 - **Sub-1 GB hardware:** not designed for it out of the box. Swap to a smaller embedder (e.g. `BAAI/bge-small-en-v1.5`) via `MNEMOS_EMBED_MODEL` if you truly need 512 MB total; retrieval quality drops but Mnemos still runs.
 

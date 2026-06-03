@@ -7,21 +7,50 @@ between document passages and search queries; we handle this transparently.
 """
 
 import hashlib
+import threading
+import time
 
 from .constants import FASTEMBED_MODEL, FASTEMBED_CACHE, FASTEMBED_DIMS
+from . import _resource
 
 _instance = None
+_last_used = 0.0
+_lock = threading.Lock()
 
 
 def _get_model():
+    global _instance, _last_used
+    with _lock:
+        if _instance is None:
+            _resource.guard_memory()
+            from fastembed import TextEmbedding
+            _instance = TextEmbedding(
+                model_name=FASTEMBED_MODEL,
+                cache_dir=FASTEMBED_CACHE,
+            )
+        _last_used = time.monotonic()
+        return _instance
+
+
+def maybe_unload(force=False):
+    """Drop the embedder if it has been idle longer than MNEMOS_MODEL_IDLE_TTL.
+
+    Returns True if a model was unloaded. The next embed() pays a one-off
+    reload (about 1-2s on a fast CPU, more on small hardware). Opt-in: with the
+    default TTL of 0 this never fires. An in-flight embed() holds its own local
+    reference to the model, so unloading here cannot pull the ONNX session out
+    from under a query that is already running (CPython refcounting keeps it
+    alive until that call returns).
+    """
     global _instance
-    if _instance is None:
-        from fastembed import TextEmbedding
-        _instance = TextEmbedding(
-            model_name=FASTEMBED_MODEL,
-            cache_dir=FASTEMBED_CACHE,
-        )
-    return _instance
+    with _lock:
+        if _instance is not None and (
+            force or (_resource.IDLE_TTL and time.monotonic() - _last_used > _resource.IDLE_TTL)
+        ):
+            _instance = None
+            _resource.trim()
+            return True
+    return False
 
 
 def embed(texts, prefix="passage"):

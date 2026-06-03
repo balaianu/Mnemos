@@ -126,18 +126,23 @@ Mnemos scales down to a Pi and up to a production server with an LLM budget. Thr
 ```bash
 export MNEMOS_ENABLE_RERANK=0
 export MNEMOS_CONTRADICT_MODE=vec
+# Resource-aware loading (v10.5.0), all optional and off by default:
+export MNEMOS_EAGER_WARMUP=0       # load models on first use, not at startup
+export MNEMOS_MODEL_IDLE_TTL=1800  # unload models after 30 min idle, reclaim RAM
+export MNEMOS_MIN_FREE_MB=500      # degrade to lighter search instead of OOM
 ```
 
 - **Models loaded**: FastEmbed e5-large only (~600 MB; drops to ~250 MB with `int8` variants)
 - **Search**: FTS5 + vec + RRF merge, no cross-encoder rerank
 - **Contradiction detection**: Tier-1 vec gate only; any close pair flagged as `contradicts`
 - **Nyx consolidation**: bookkeeping phases only (no LLM required), skip merge/weave/synthesis
+- **Resource-aware models (v10.5.0)**: with `MNEMOS_MODEL_IDLE_TTL` set, an idle embedder/reranker is dropped and its RAM returned to the OS (the next query pays a one-off reload); `MNEMOS_MIN_FREE_MB` makes the search path degrade to vec-only then FTS5 under memory pressure rather than risk an OOM. Both default off, so nothing changes unless you opt in.
 - **Good for**: personal memory on constrained hardware, offline-first deployments
 
 ### 2. Standard self-hosted (default, no API costs)
 
 ```bash
-# Default config — no env vars needed
+# Default config - no env vars needed
 ```
 
 - **Models loaded**: FastEmbed e5-large (~600 MB) + Jina cross-encoder (~500 MB)
@@ -158,12 +163,12 @@ export MNEMOS_TOOL_USAGE_LOG=1       # optional: MCP call diagnostics
 
 - **Models loaded**: e5-large + Jina + LLM API (no local LLM weights)
 - **Search**: full hybrid pipeline (unchanged from standard profile)
-- **Contradiction detection**: five-way LLM classification — `contradicts`, `refines`, `evolves`, `relates`, `unrelated`
-- **Nyx consolidation**: all phases run on schedule — merge/weave/synthesize build a model of the user over time
+- **Contradiction detection**: five-way LLM classification - `contradicts`, `refines`, `evolves`, `relates`, `unrelated`
+- **Nyx consolidation**: all phases run on schedule - merge/weave/synthesize build a model of the user over time
 - **Analytics**: retrieval and tool-usage logs feed autoimprove benchmarks and quality analysis
 - **Good for**: production deployments where memory is a shared agent resource, teams, long-running research systems
 
-The profiles are cumulative, not exclusive: flipping `MNEMOS_LLM_*` on at any point unlocks LLM-dependent features without touching the rest. No "upgrade" migration needed — just env var changes.
+The profiles are cumulative, not exclusive: flipping `MNEMOS_LLM_*` on at any point unlocks LLM-dependent features without touching the rest. No "upgrade" migration needed - just env var changes.
 
 ## CML: token-minimal memory format
 

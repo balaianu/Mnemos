@@ -130,7 +130,7 @@ class SQLiteStore(MnemosStore):
         # doesn't ALTER an existing schema, so we explicitly patch missing
         # columns before any CREATE INDEX that might reference them. Without
         # this, pointing Mnemos at an older DB threw "no such column:
-        # namespace" at the first index create — a cryptic first-run failure
+        # namespace" at the first index create - a cryptic first-run failure
         # that's now a silent migration.
         existing_cols = {r[1] for r in conn.execute("PRAGMA table_info(memories)").fetchall()}
         _column_backfills = [
@@ -154,7 +154,7 @@ class SQLiteStore(MnemosStore):
                 except Exception:
                     # ALTER ADD COLUMN can fail on exotic cases (e.g. a
                     # NOT NULL DEFAULT on a table with a trigger); log
-                    # and press on — the index below will throw with a
+                    # and press on - the index below will throw with a
                     # clearer error if the column truly didn't land.
                     pass
         # Indexes (only created after the backfill pass above so older DBs
@@ -228,7 +228,7 @@ class SQLiteStore(MnemosStore):
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_nyx_memory ON nyx_insights(memory_id)")
         # Consolidation audit log (always-on). Every Nyx-cycle run emits one
-        # row here via store.log_consolidation_run() — health checks,
+        # row here via store.log_consolidation_run() - health checks,
         # "last run" lookups, and post-hoc debugging all read this table.
         # Schema aligned with Epsilon's v8 layout so a shared DB works.
         conn.execute("""
@@ -239,6 +239,8 @@ class SQLiteStore(MnemosStore):
                 clusters_merged INTEGER DEFAULT 0,
                 memories_archived INTEGER DEFAULT 0,
                 memories_created INTEGER DEFAULT 0,
+                access_decayed INTEGER DEFAULT 0,
+                importance_demoted INTEGER DEFAULT 0,
                 details TEXT DEFAULT '',
                 phase_details TEXT DEFAULT '{}'
             )
@@ -268,7 +270,7 @@ class SQLiteStore(MnemosStore):
         conn.execute("CREATE INDEX IF NOT EXISTS idx_retrieval_memory ON retrieval_log(memory_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_retrieval_useful ON retrieval_log(useful)")
         # Tool-usage log (opt-in; populated when MNEMOS_TOOL_USAGE_LOG=1).
-        # Only tool name + timestamp — no content, no query text, no IDs.
+        # Only tool name + timestamp - no content, no query text, no IDs.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS tool_usage (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -666,8 +668,13 @@ class SQLiteStore(MnemosStore):
 
     def log_consolidation_run(self, clusters_found=0, clusters_merged=0,
                               memories_archived=0, memories_created=0,
-                              details="", phase_details="{}"):
+                              details="", phase_details="{}",
+                              access_decayed=0, importance_demoted=0):
         """Insert one audit row summarizing a Nyx cycle run.
+
+        access_decayed/importance_demoted come from Phase 6 bookkeeping, so
+        SQL-only runs (no LLM, no clusters) still record meaningful counts in
+        the main columns instead of leaving an all-zero-looking row.
 
         Failures are swallowed: the audit log is a best-effort side
         channel, never a hard dependency of cycle correctness. Callers
@@ -679,10 +686,12 @@ class SQLiteStore(MnemosStore):
             conn.execute(
                 "INSERT INTO consolidation_log "
                 "(clusters_found, clusters_merged, memories_archived, "
-                " memories_created, details, phase_details) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                " memories_created, access_decayed, importance_demoted, "
+                " details, phase_details) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (clusters_found, clusters_merged, memories_archived,
-                 memories_created, details, phase_details),
+                 memories_created, access_decayed, importance_demoted,
+                 details, phase_details),
             )
             conn.commit()
         except Exception:
@@ -693,7 +702,7 @@ class SQLiteStore(MnemosStore):
     def log_tool_usage(self, tool_name):
         """Insert one row recording an MCP tool call.
 
-        Failures swallowed — tool_usage is diagnostics only, never a hard
+        Failures swallowed - tool_usage is diagnostics only, never a hard
         dependency of server correctness.
         """
         if not tool_name:
@@ -793,7 +802,7 @@ class SQLiteStore(MnemosStore):
                 params + [min_count, limit],
             ).fetchall()
         except sqlite3.OperationalError:
-            # Recursive CTE depth limit or similar — fall back to Python-side
+            # Recursive CTE depth limit or similar - fall back to Python-side
             # aggregation for safety. SQLite's default recursion limit is
             # high (1000), so this should only trip on pathological tag
             # strings.

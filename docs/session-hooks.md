@@ -13,13 +13,13 @@ The repository ships a reference implementation at
 | Event | Subcommand | Purpose |
 | --- | --- | --- |
 | `SessionStart` | `start` | Inject the standard briefing + first-pass priming from the working directory. Briefing is sentence-aware truncated (v10.1.2) so cut-off lines end with ` …` rather than dangling mid-sentence. |
-| `UserPromptSubmit` | `prompt` | Fire on first user message per session. Run a second priming pass using the user's actual question as the vec-search context. This is where meaningful topical memories surface — CWD alone is usually too weak a signal. Subsequent prompts in the same session are no-ops via a marker file. |
+| `UserPromptSubmit` | `prompt` | Fire on first user message per session. Run a second priming pass using the user's actual question as the vec-search context. This is where meaningful topical memories surface - CWD alone is usually too weak a signal. Subsequent prompts in the same session are no-ops via a marker file. |
 | `Stop` | `stop` | No-op by default. If you want a "long session without any stores" nag, wire it here via transcript parsing (no LLM needed). |
 
 ## Why two priming passes (start + prompt)?
 
 At `SessionStart` the only context signal is the working directory. That's
-weak — a bare `/root` or `/home/user` path matches random memories across
+weak - a bare `/root` or `/home/user` path matches random memories across
 all projects. The `UserPromptSubmit` hook has access to what the user just
 typed, which is a much stronger vec-search anchor.
 

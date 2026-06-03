@@ -69,7 +69,7 @@ def register_extractor(extension: str, fn: Callable[[Path], Optional[str]]) -> N
     _extractors[extension.lower()] = fn
 
 
-_MAX_READ_BYTES = 50 * 1024 * 1024  # 50 MB — larger files should be chunked
+_MAX_READ_BYTES = 50 * 1024 * 1024  # 50 MB - larger files should be chunked
                                      # externally or have a custom extractor
                                      # registered; not worth holding half a GB
                                      # of text in RAM during ingest.

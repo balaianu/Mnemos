@@ -20,6 +20,38 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [10.5.0] - 2026-06-03 (Resource-aware models + standalone SQL-only triage)
+
+Changes aimed at running Mnemos well on small or shared hosts. All new
+behaviour is opt-in and defaults to the previous behaviour, so existing
+deployments are unaffected unless they set the new variables.
+
+### Added
+- **Optional idle model unloading.** `MNEMOS_MODEL_IDLE_TTL` (seconds, default
+  `0` = never) lets a background reaper drop the embedder and reranker after
+  they sit idle, returning their RSS to the OS (dropping the model frees the
+  ONNX session and its arena; `malloc_trim` reclaims the glibc residue). The
+  next query pays a one-off reload. Stops a long-lived server from pinning the
+  models in RAM while idle on a constrained box.
+- **Lazy model warmup.** `MNEMOS_EAGER_WARMUP=0` loads models on first use
+  instead of at startup. Default `1` keeps the warm-at-startup behaviour.
+- **Memory-pressure guard.** `MNEMOS_MIN_FREE_MB` (default `0` = off) refuses
+  to load a model when available memory is below the floor, so the search path
+  degrades gracefully (vec-only, then FTS5) instead of risking an OOM on a
+  memory-tight host.
+- `access_decayed` and `importance_demoted` columns on `consolidation_log`, so
+  bookkeeping-only runs record their decay and demotion counts in the main
+  audit columns rather than only inside `phase_details`. Existing databases are
+  migrated automatically on the next cycle.
+
+### Changed
+- **Phase 1 (Triage) now runs standalone.** Triage is pure SQL and no longer
+  sits behind the LLM-phase block, so SQL-only deployments
+  (`MNEMOS_DISABLE_LLM=1`) get new-memory detection and surge sensing, not just
+  Phase 6 bookkeeping.
+
+---
+
 ## [10.4.4] - 2026-05-30 (LLM wall-clock budget + per-call timeout override)
 
 Robustness patch for the consolidation LLM client. Caps total wall-clock
@@ -141,7 +173,7 @@ default model preset for the OpenAI endpoint.
   land already in CML form. Falls back silently to the raw content on any
   LLM failure: this flag never turns LLM into a hard dependency. Skipped
   when the caller sets `consolidation_lock=True`.
-- **`mnemos/cemelify.py`** new module exposing `cemelify(content)` —
+- **`mnemos/cemelify.py`** new module exposing `cemelify(content)` -
   a single-entry helper that routes through `consolidation.llm.chat()`,
   inheriting all env routing (API URL, key, model, per-phase overrides,
   the new OpenAI default below).
@@ -204,8 +236,8 @@ but all reproducible with concrete triggers.
 ### Not fixed (audit false positives, documented for future-me)
 
 - `bulk_rewrite` with `max_affected=1` and all-no-op replacements
-  reports `affected=0` — technically correct, semantics are clear.
-- `doctor(migrate=True)` with backup failure — correctly aborts and
+  reports `affected=0` - technically correct, semantics are clear.
+- `doctor(migrate=True)` with backup failure - correctly aborts and
   reports the error. No silent data loss.
 
 ---
@@ -243,9 +275,9 @@ eventually.
 Two items flagged by the audit were not actual bugs:
 - Multi-hop BFS was accused of exceeding the depth cap. Traced:
   `if dist >= linked_depth: continue` fires before expansion, so
-  grandchildren at max depth are collected (correct — depth is
+  grandchildren at max depth are collected (correct - depth is
   inclusive) but great-grandchildren are never added. Invariant holds.
-- "Malformed LLM classification bypasses validation" — same code path
+- "Malformed LLM classification bypasses validation" - same code path
   as the LLM empty-response bug; the existing
   `if word in self._CONTRADICTION_CLASSES:` check catches `"---"` and
   similar. Folded into the LLM fix above.
@@ -304,7 +336,7 @@ path.
   content into sentences on `. ! ?` and picks the sentence with the
   highest substantive-word overlap with the query (stopwords dropped,
   min token length 3). If no sentence has any matching tokens, falls
-  back to head slice as before. Cheap — no extra embedding calls.
+  back to head slice as before. Cheap - no extra embedding calls.
 - Keeps the existing semantics where exact-token matches still go through
   FTS `snippet()` for BM25-ranked extraction.
 
@@ -434,7 +466,7 @@ Each entry in `linked_memories`:
 ### Changed
 
 - **Removed the defensive rerank-off graceful degrade added in v10.3.2.**
-  The cross-encoder is canonical — Mnemos's benchmark numbers and the
+  The cross-encoder is canonical - Mnemos's benchmark numbers and the
   `relates` silent-link refinement both require it. Pretending otherwise
   with graceful degradation paths added code without adding honesty.
   The honest API is:
@@ -471,11 +503,11 @@ surface them.
   regardless of `Mnemos.enable_rerank` / `MNEMOS_ENABLE_RERANK=0`.
   Consequences depending on environment:
   - On a machine where the Jina model still loaded successfully, the
-    opt-out was silently negated — the ~500 MB the user was trying to
+    opt-out was silently negated - the ~500 MB the user was trying to
     save got loaded anyway during the first contradiction check.
   - On truly constrained machines where the model import failed, the
     rerank call raised, was caught, and `_detect_contradictions`
-    returned `[]` — dropping ALL contradictions silently.
+    returned `[]` - dropping ALL contradictions silently.
 
   Fix: when `mode=rerank` and `self.enable_rerank` is False, degrade
   gracefully to the `mode=vec` path (all vec-gated candidates → flagged
@@ -512,7 +544,7 @@ surface them.
   episodic memory at session end containing session metadata: session id,
   timestamp, working directory, assistant turn count, tool-call breakdown
   by name, first/last user prompt snippets. Purely structural extraction
-  via `jq` on `CLAUDE_TRANSCRIPT` — no LLM call. Next session's briefing
+  via `jq` on `CLAUDE_TRANSCRIPT` - no LLM call. Next session's briefing
   picks up the summary by recency, giving cross-session continuity
   without violating the "in-session LLM is authoritative" principle.
 
@@ -561,21 +593,21 @@ real contradictions still surface.
 ### Added
 
 - **`relates` link type** (alongside existing `contradicts`, `reflects`,
-  `evolves`, `supersedes`, `enables`). No schema migration needed —
+  `evolves`, `supersedes`, `enables`). No schema migration needed -
   `memory_links.relation_type` is free-form text, this is a new sentinel
   value.
 
 - **`MNEMOS_CONTRADICT_MODE` env var** with four values:
-  - `off` — disable contradiction detection entirely
-  - `vec` — Tier 1 only (vec gate, no rerank); all vec-gated candidates
+  - `off` - disable contradiction detection entirely
+  - `vec` - Tier 1 only (vec gate, no rerank); all vec-gated candidates
     → `contradicts`. Matches pre-v10.3 behavior for users who explicitly
     want it.
-  - `rerank` (default) — Tier 1 + Tier 2. Vec gate + cross-encoder rerank
+  - `rerank` (default) - Tier 1 + Tier 2. Vec gate + cross-encoder rerank
     with two thresholds:
     - `CONTRADICTION_RERANK_MIN` (0.35): below → skip, not even topical
     - `CONTRADICTION_RERANK_HIGH` (0.60): above → `contradicts` + warn
     - Between MIN and HIGH → `relates`, silent link, no warning
-  - `llm` — Tier 1 + Tier 2 + Tier 3 LLM classification. Each rerank
+  - `llm` - Tier 1 + Tier 2 + Tier 3 LLM classification. Each rerank
     survivor is classified by LLM into one of {contradicts, refines,
     evolves, relates, unrelated}. Requires MNEMOS_LLM_* env vars.
 
@@ -630,7 +662,7 @@ persisted, no warning emitted.
   memories with a preview-commit flow. Default `dry_run=true` returns per-
   memory before/after snippets without touching the DB; caller commits
   with `dry_run=false`. `max_affected` cap aborts before any write if
-  the pattern would modify more memories than allowed — prevents runaway
+  the pattern would modify more memories than allowed - prevents runaway
   rewrites. Re-embeds every modified memory (content changed means
   embedding must change too). Supports both plain substring (default)
   and Python regex (via `use_regex=true`). Namespace-scoped, active-only.
@@ -643,7 +675,7 @@ persisted, no warning emitted.
   Why 6 tools now: still 4 CRUD (`memory_store`, `memory_search`,
   `memory_get`, `memory_update`) + 1 schema-discovery (`memory_list_tags`)
   + 1 batch-operation (`memory_bulk_rewrite`). Bulk rewrite is a
-  distinct operation category — not CRUD (doesn't operate on a single
+  distinct operation category - not CRUD (doesn't operate on a single
   memory or return search results), not schema discovery (mutates
   content). The "4 tools and not 45" principle holds: each tool here
   represents an operation category that cannot be collapsed into an
@@ -684,7 +716,7 @@ mnemos.bulk_rewrite(
 ### Added
 
 - **`tool_usage` table + opt-in write path**. When `MNEMOS_TOOL_USAGE_LOG=1`
-  every MCP tool call records `(tool_name, called_at)` — no arguments, no
+  every MCP tool call records `(tool_name, called_at)` - no arguments, no
   content, no IDs. Useful for health-check tooling that wants to answer
   "has the MCP server been responsive?" without parsing stdin/stdout logs.
   Default off for consistency with retrieval_log, though the privacy
@@ -701,7 +733,7 @@ mnemos.bulk_rewrite(
 
   Backend API: `MnemosStore.log_tool_usage(tool_name)`. Base class no-op;
   SQLiteStore does the INSERT. MCP server calls it in `tools/call`
-  dispatch when the flag is set. Failures swallowed — diagnostics only.
+  dispatch when the flag is set. Failures swallowed - diagnostics only.
 
 ### MCP deployment completeness
 
@@ -723,7 +755,7 @@ All three are opt-in; enable via env vars per deployment.
   --execute` would lack these tables entirely, breaking health-check tooling
   and "last run" queries that read `consolidation_log` defensively.
   `_migrate_nyx_schema` is retained as a safety net for older DBs that
-  predate this change — CREATE IF NOT EXISTS makes it idempotent.
+  predate this change - CREATE IF NOT EXISTS makes it idempotent.
 
 ### Added
 
@@ -789,7 +821,7 @@ operator's scripts expect" gap.
   outcomes, errors). Queued as the natural companion to retrieval_log.
 - `useful` flag write path: schema allows a later UPDATE to mark a logged
   retrieval as helpful/unhelpful, enabling supervised quality signals.
-  No MCP tool yet to emit that flag — the column is reserved.
+  No MCP tool yet to emit that flag - the column is reserved.
 
 ---
 
@@ -874,7 +906,7 @@ additions: existing callers see no behavior change.
 ### Added
 
 - **`memory_list_tags` MCP tool** (5th tool). Returns every unique tag in the
-  namespace with usage count and an example memory ID. Prevents tag drift —
+  namespace with usage count and an example memory ID. Prevents tag drift -
   agents creating synonymous tags (`authoritative` / `canonical` / `verified`)
   because they cannot see what already exists. This is a different category
   of operation than the 4 memory CRUD tools: it introspects the tag schema,
@@ -894,7 +926,7 @@ additions: existing callers see no behavior change.
 - **`include_linked` parameter on `memory_search`**. If true, folds first-hop
   linked memories into each result as `linked_memories: [{id, project,
   relation, strength, content}]` summaries. Saves round-trips when tracing
-  relationship graphs — one search call returns the hit plus everything it
+  relationship graphs - one search call returns the hit plus everything it
   links to instead of one call per link. Depth=1 only for now.
 
 ### Tool count

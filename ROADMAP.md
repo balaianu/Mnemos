@@ -16,7 +16,7 @@ memory, ~6-8s wall time each. On a 750-candidate Nyx run that's 75-100
 minutes for cemelify alone, blocking Phase 2A dedup behind it.
 
 The standalone `cml_convert_batch` helper used during the v10.4.0 data
-fix processed 457 memories in 5 min 41 s using 8 parallel workers — same
+fix processed 457 memories in 5 min 41 s using 8 parallel workers - same
 LLM, same prompt, same content shape. Order-of-magnitude speedup.
 
 Implementation sketch:
@@ -29,7 +29,7 @@ Implementation sketch:
   defaults; users on tighter limits can dial down via env
 
 Risk: thread safety of the SQLite write path inside `store.update_memory`
-needs verification — SQLite handles concurrent writes via WAL but the
+needs verification - SQLite handles concurrent writes via WAL but the
 SQLAlchemy-style connection pool in `SQLiteStore` may not. Worst case:
 parallelize the LLM calls only, batch the writes serially after.
 

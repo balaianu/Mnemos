@@ -61,16 +61,16 @@ CONTRADICTION_RERANK_THRESHOLD = CONTRADICTION_RERANK_MIN
 
 # --- Contradiction detection mode ---
 # Three-tier classification behaviour:
-#   off    — disable contradiction detection entirely
-#   vec    — Tier 1 only (vec gate, no rerank); all vec-gated pairs → contradicts.
+#   off    - disable contradiction detection entirely
+#   vec    - Tier 1 only (vec gate, no rerank); all vec-gated pairs → contradicts.
 #            This is the honest opt-out path for users who have disabled the
 #            reranker (MNEMOS_ENABLE_RERANK=0).
-#   rerank — Tier 1 + Tier 2 (default, recommended): vec + rerank with HIGH
+#   rerank - Tier 1 + Tier 2 (default, recommended): vec + rerank with HIGH
 #            threshold distinguishing `contradicts` from `relates`. REQUIRES
 #            the cross-encoder: the `relates` silent-link refinement is what
-#            rerank buys you. If you disable rerank, use mode=vec instead —
+#            rerank buys you. If you disable rerank, use mode=vec instead -
 #            mode=rerank will silently return no contradictions.
-#   llm    — Tier 1 + Tier 2 + Tier 3 LLM classification: moderate-score pairs
+#   llm    - Tier 1 + Tier 2 + Tier 3 LLM classification: moderate-score pairs
 #            are classified by LLM into {contradicts, refines, evolves,
 #            relates, unrelated}. REQUIRES both the cross-encoder AND
 #            MNEMOS_LLM_* env vars configured.
@@ -137,7 +137,7 @@ DEFAULT_RETRIEVAL_LOG = os.environ.get(
 # `tool_usage` table. Purpose: health-check tooling can answer "has the MCP
 # server been responsive?" without parsing stdin/stdout logs. Cost: one
 # INSERT per tool call, bytes per day of storage. Contains no query text,
-# no memory content, no IDs — only the tool name + when it was called.
+# no memory content, no IDs - only the tool name + when it was called.
 # Default off for consistency with retrieval_log, though privacy footprint
 # is essentially zero since no user content is captured.
 #   export MNEMOS_TOOL_USAGE_LOG=1   # enable

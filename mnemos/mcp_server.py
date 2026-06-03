@@ -21,7 +21,7 @@ import threading
 import time
 
 from .core import Mnemos
-from . import _resource
+from . import _resource, __version__
 from .constants import (
     DEFAULT_PROJECTS, VALID_TYPES, VALID_LAYERS, DEFAULT_NAMESPACE,
     CML_MODE, DEFAULT_TOOL_USAGE_LOG,
@@ -313,7 +313,7 @@ def send_msg(msg):
 
 
 def main():
-    sys.stderr.write("Mnemos MCP server v10.2 starting (CPU-only, no GPU required)\n")
+    sys.stderr.write(f"Mnemos MCP server v{__version__} starting (CPU-only, no GPU required)\n")
     sys.stderr.flush()
 
     mnemos = build_mnemos()
@@ -353,7 +353,7 @@ def main():
                 "result": {
                     "protocolVersion": "2024-11-05",
                     "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "mnemos", "version": "10.3.10"},
+                    "serverInfo": {"name": "mnemos", "version": __version__},
                 },
             })
             # Warm up the models so the first search is instant. Eager by

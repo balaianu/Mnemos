@@ -283,7 +283,8 @@ class SQLiteStore(MnemosStore):
 
     # --- CRUD ---
 
-    def store_memory(self, memory: Memory, embedding: Optional[list] = None) -> int:
+    def store_memory(self, memory: Memory, embedding: Optional[list] = None,
+                     text_hash: Optional[str] = None) -> int:
         conn = self._get_conn()
         cur = conn.execute(
             """INSERT INTO memories
@@ -302,7 +303,7 @@ class SQLiteStore(MnemosStore):
         mid = cur.lastrowid
         conn.commit()
         if embedding is not None:
-            self._store_embedding(mid, embedding)
+            self._store_embedding(mid, embedding, text_hash=text_hash)
         return mid
 
     def _get_vec_join_col(self) -> str:
@@ -322,13 +323,19 @@ class SQLiteStore(MnemosStore):
             self._vec_join_col = "rowid"
         return self._vec_join_col
 
-    def _store_embedding(self, mid: int, embedding: list):
+    def _store_embedding(self, mid: int, embedding: list,
+                         text_hash: Optional[str] = None):
         """Insert or replace the embedding for a memory.
 
         Handles both embed_vec schemas (implicit rowid vs explicit id)
         so the same code works against fresh Mnemos-created DBs and
         against DBs created by other tooling that declares an explicit
         `id INTEGER PRIMARY KEY` column on the vec0 virtual table.
+
+        text_hash records the canonical embed-text's hash so staleness
+        (content updated, re-embed failed, old vector retained) is
+        detectable later; without it a stale vector is indistinguishable
+        from a fresh one.
         """
         conn = self._get_conn()
         join_col = self._get_vec_join_col()
@@ -350,8 +357,8 @@ class SQLiteStore(MnemosStore):
             # Explicit-id schema: pre-insert into embed_meta, then use its
             # auto-assigned id as the vec0 row id
             cur = conn.execute(
-                "INSERT INTO embed_meta (source_db, source_id) VALUES (?, ?)",
-                (self.SOURCE_KEY, mid),
+                "INSERT INTO embed_meta (source_db, source_id, text_hash) VALUES (?, ?, ?)",
+                (self.SOURCE_KEY, mid, text_hash),
             )
             meta_id = cur.lastrowid
             conn.execute(
@@ -367,8 +374,8 @@ class SQLiteStore(MnemosStore):
             )
             vec_id = cur.lastrowid
             conn.execute(
-                "INSERT INTO embed_meta (id, source_db, source_id) VALUES (?, ?, ?)",
-                (vec_id, self.SOURCE_KEY, mid),
+                "INSERT INTO embed_meta (id, source_db, source_id, text_hash) VALUES (?, ?, ?, ?)",
+                (vec_id, self.SOURCE_KEY, mid, text_hash),
             )
         conn.commit()
 
@@ -397,7 +404,8 @@ class SQLiteStore(MnemosStore):
         "last_confirmed", "last_accessed", "access_count",
     })
 
-    def update_memory(self, mid: int, fields: dict, embedding: Optional[list] = None) -> bool:
+    def update_memory(self, mid: int, fields: dict, embedding: Optional[list] = None,
+                      text_hash: Optional[str] = None) -> bool:
         conn = self._get_conn()
         # Filter to known columns so an unexpected key cannot inject SQL
         safe_fields = {k: v for k, v in (fields or {}).items() if k in self._UPDATABLE_COLUMNS}
@@ -420,7 +428,7 @@ class SQLiteStore(MnemosStore):
                 return False
             rowcount = 1
         if embedding is not None:
-            self._store_embedding(mid, embedding)
+            self._store_embedding(mid, embedding, text_hash=text_hash)
         return rowcount > 0
 
     def delete_memory(self, mid: int, hard: bool = False) -> bool:
@@ -441,6 +449,12 @@ class SQLiteStore(MnemosStore):
                     "DELETE FROM embed_meta WHERE source_db = ? AND source_id = ?",
                     (self.SOURCE_KEY, mid),
                 )
+            # Links referencing a hard-deleted memory would otherwise persist
+            # as phantom rows forever (nothing else ever prunes by absence).
+            conn.execute(
+                "DELETE FROM memory_links WHERE source_id = ? OR target_id = ?",
+                (mid, mid),
+            )
             conn.execute("DELETE FROM memories WHERE id = ?", (mid,))
         else:
             conn.execute(

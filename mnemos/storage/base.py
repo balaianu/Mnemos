@@ -78,15 +78,18 @@ class MnemosStore(ABC):
     # --- CRUD ---
 
     @abstractmethod
-    def store_memory(self, memory: Memory, embedding: Optional[list] = None) -> int:
-        """Insert a new memory. Returns assigned ID. Embedding is optional."""
+    def store_memory(self, memory: Memory, embedding: Optional[list] = None,
+                     text_hash: Optional[str] = None) -> int:
+        """Insert a new memory. Returns assigned ID. Embedding is optional;
+        text_hash records the canonical embed-text hash for staleness checks."""
 
     @abstractmethod
     def get_memory(self, mid: int, increment_access: bool = True) -> Optional[Memory]:
         """Fetch a memory by ID. Optionally bumps access count + last_accessed."""
 
     @abstractmethod
-    def update_memory(self, mid: int, fields: dict, embedding: Optional[list] = None) -> bool:
+    def update_memory(self, mid: int, fields: dict, embedding: Optional[list] = None,
+                      text_hash: Optional[str] = None) -> bool:
         """Update specified fields. If content/tags/type/layer change, re-embed."""
 
     @abstractmethod

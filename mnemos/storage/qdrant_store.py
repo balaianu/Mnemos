@@ -77,7 +77,7 @@ class QdrantStore(MnemosStore):
 
     # --- Delegate metadata operations to SQLite ---
 
-    def store_memory(self, memory: Memory, embedding=None) -> int:
+    def store_memory(self, memory: Memory, embedding=None, text_hash=None) -> int:
         mid = self._sqlite.store_memory(memory, embedding=None)  # skip sqlite-vec
         if embedding is not None:
             self._upsert_vector(mid, embedding, memory)
@@ -107,7 +107,7 @@ class QdrantStore(MnemosStore):
     def get_memory(self, mid, increment_access=True):
         return self._sqlite.get_memory(mid, increment_access=increment_access)
 
-    def update_memory(self, mid, fields, embedding=None):
+    def update_memory(self, mid, fields, embedding=None, text_hash=None):
         ok = self._sqlite.update_memory(mid, fields, embedding=None)
         if ok and embedding is not None:
             mem = self._sqlite.get_memory(mid, increment_access=False)

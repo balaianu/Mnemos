@@ -18,6 +18,7 @@ mnemos.consolidation.prompts
 """
 
 import json
+import os
 import re
 import sqlite3
 import struct
@@ -35,7 +36,16 @@ from ..embed import embed as fastembed_embed_raw, text_hash, prep_memory_text
 from ..constants import (
     SKIP_IMPORTANCE, MAX_CLUSTER_SIZE,
     FASTEMBED_MODEL, FASTEMBED_DIMS, CML_MODE,
+    DEFAULT_NAMESPACE,
 )
+
+
+def _active_namespace():
+    """Namespace for memories Nyx creates, same resolution as the MCP server
+    and CLI. Without this, consolidation outputs land in 'default' and become
+    invisible to every namespace-filtered search: the cycle would archive
+    visible memories and replace them with unreachable ones."""
+    return os.environ.get("MNEMOS_NAMESPACE", DEFAULT_NAMESPACE)
 
 
 def _merge_prompt():
@@ -397,10 +407,10 @@ def apply_merge(conn, cluster_ids, merged_content, mem_by_id):
     try:
         conn.execute("BEGIN")
         conn.execute(
-            "INSERT INTO memories (project, content, tags, importance, type, verified, "
+            "INSERT INTO memories (namespace, project, content, tags, importance, type, verified, "
             "consolidation_lock, layer, last_confirmed) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, 'semantic', ?)",
-            (project, merged_content, ",".join(sorted(all_tags)), max_importance,
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'semantic', ?)",
+            (_active_namespace(), project, merged_content, ",".join(sorted(all_tags)), max_importance,
              inherit_type, inherit_verified, inherit_lock, inherit_confirmed),
         )
         new_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -706,10 +716,10 @@ def phase_weave(conn, all_embeddings, mem_by_id, is_surge, execute=False):
                 else:
                     content = f"L: Bridge #{mid_a}↔#{mid_b}: {insight}"
                 conn.execute(
-                    "INSERT INTO memories (project, content, tags, importance, "
+                    "INSERT INTO memories (namespace, project, content, tags, importance, "
                     "type, layer, consolidation_lock) "
-                    "VALUES ('personal', ?, ?, 5, 'learning', 'semantic', 1)",
-                    (content, tag_str),
+                    "VALUES (?, 'personal', ?, ?, 5, 'learning', 'semantic', 1)",
+                    (_active_namespace(), content, tag_str),
                 )
                 conn.commit()
                 stats["insights_stored"] += 1
@@ -985,10 +995,10 @@ def phase_synthesize(conn, all_embeddings, mem_by_id, execute=False):
 
     for insight in insights:
         cur = conn.execute(
-            "INSERT INTO memories (project, content, tags, importance, "
+            "INSERT INTO memories (namespace, project, content, tags, importance, "
             "type, layer, consolidation_lock) "
-            "VALUES ('personal', ?, ?, 5, 'learning', 'semantic', 1)",
-            (insight, tag_str),
+            "VALUES (?, 'personal', ?, ?, 5, 'learning', 'semantic', 1)",
+            (_active_namespace(), insight, tag_str),
         )
         new_memory_id = cur.lastrowid
         # Link the new insight memory to the source packet via nyx_insights

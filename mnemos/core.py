@@ -19,7 +19,7 @@ from typing import Optional
 
 from .storage.base import MnemosStore, Memory
 from .storage.sqlite_store import SQLiteStore
-from .embed import embed, prep_memory_text
+from .embed import embed, prep_memory_text, text_hash as embed_text_hash
 from .rerank import rerank, rrf_merge
 from .query import fts_dedup
 from .constants import (
@@ -119,10 +119,12 @@ class Mnemos:
             if dupe:
                 return dupe
 
-        # Embed if not already
+        # Embed if not already. The hash is of the canonical embed text and
+        # travels with the vector so staleness stays detectable; it applies
+        # equally to dedup-cached embeddings, which embed the same text.
+        canonical_text = prep_memory_text(project, content, tags, mem_type=mem_type, layer=layer)
         if cached_embedding is None:
-            text = prep_memory_text(project, content, tags, mem_type=mem_type, layer=layer)
-            embeddings = embed([text], prefix="passage")
+            embeddings = embed([canonical_text], prefix="passage")
             if embeddings and embeddings[0]:
                 cached_embedding = embeddings[0]
 
@@ -141,7 +143,10 @@ class Mnemos:
             valid_until=valid_until,
             consolidation_lock=1 if consolidation_lock else 0,
         )
-        mid = self.store.store_memory(memory, embedding=cached_embedding)
+        mid = self.store.store_memory(
+            memory, embedding=cached_embedding,
+            text_hash=embed_text_hash(canonical_text) if cached_embedding else None,
+        )
 
         result = {
             "id": mid, "status": "stored", "project": project,
@@ -362,6 +367,12 @@ class Mnemos:
             docs = [{"text": m.content, "id": mid} for mid, m in memories.items()]
             ranked = rerank(content, docs)
         except Exception:
+            return []
+        # rerank() degrades by returning the docs unscored. Scoring those
+        # with the sigmoid default would put EVERY candidate at exactly 0.5,
+        # inside the `relates` band, mass-writing spurious links on any
+        # reranker hiccup. No scores = no classification basis = bail.
+        if not any("_rerank_score" in d for d in ranked):
             return []
 
         llm_available = False
@@ -657,6 +668,11 @@ class Mnemos:
                         mem = fetched.get(c["id"]) or memories.get(c["id"])
                         if not mem:
                             continue
+                        # Search results are status-filtered; the link graph
+                        # is not. Without this guard, archived content
+                        # resurfaces in summaries of active results.
+                        if mem.status != "active":
+                            continue
                         summary = {
                             "id": c["id"],
                             "project": mem.project,
@@ -743,6 +759,7 @@ class Mnemos:
         # Re-embed if content/tags/type/layer change
         needs_embed = any(k in fields for k in ("content", "tags", "type", "layer"))
         embedding = None
+        thash = None
         if needs_embed:
             current = self.store.get_memory(mid, increment_access=False)
             if not current:
@@ -758,11 +775,23 @@ class Mnemos:
             embeddings = embed([text], prefix="passage")
             if embeddings and embeddings[0]:
                 embedding = embeddings[0]
+                thash = embed_text_hash(text)
 
-        ok = self.store.update_memory(mid, fields, embedding=embedding)
+        ok = self.store.update_memory(mid, fields, embedding=embedding, text_hash=thash)
         if not ok:
             return {"error": f"Memory #{mid} not found"}
-        return {"id": mid, "status": "updated", "fields": list(fields.keys())}
+        result = {"id": mid, "status": "updated", "fields": list(fields.keys())}
+        if needs_embed:
+            # A failed re-embed leaves the OLD vector in place; the caller
+            # must be able to see that, and the stale text_hash makes it
+            # repairable by embed-status/sync tooling.
+            result["embedded"] = embedding is not None
+            if embedding is None:
+                result["warning"] = (
+                    "content changed but re-embedding failed; vector is stale "
+                    "until the next embed sync"
+                )
+        return result
 
     def delete(self, mid: int, hard: bool = False) -> dict:
         ok = self.store.delete_memory(mid, hard=hard)
@@ -1121,10 +1150,40 @@ class Mnemos:
             "WHERE em.source_db = 'memory' AND m.status='active' AND m.namespace=?",
             (self.namespace,),
         ).fetchone()[0]
+
+        # Staleness: a vector whose recorded embed-text hash no longer
+        # matches the memory's current canonical text (content updated but
+        # re-embedding failed). Rows with no recorded hash predate hash
+        # tracking and are reported as unverified rather than presumed
+        # fresh or stale.
+        stale = 0
+        unverified = 0
+        rows = conn.execute(
+            "SELECT m.project, m.content, m.tags, m.type, m.layer, em.text_hash "
+            "FROM embed_meta em JOIN memories m ON m.id = em.source_id "
+            "WHERE em.source_db = 'memory' AND m.status='active' AND m.namespace=?",
+            (self.namespace,),
+        ).fetchall()
+        for r in rows:
+            if not r["text_hash"]:
+                unverified += 1
+                continue
+            current = embed_text_hash(prep_memory_text(
+                r["project"], r["content"], r["tags"] or "",
+                mem_type=r["type"] or "", layer=r["layer"] or "",
+            ))
+            # Truncated legacy hashes are prefixes of the full sha256, so a
+            # prefix match verifies freshness without forcing a re-embed.
+            stored = r["text_hash"]
+            if current != stored and not current.startswith(stored):
+                stale += 1
+
         return {
             "active": active,
             "embedded": embedded,
             "missing": active - embedded,
+            "stale": stale,
+            "unverified": unverified,
             "coverage": round(embedded / active, 4) if active else 0.0,
         }
 

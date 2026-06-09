@@ -4,6 +4,21 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.6.0] - 2026-06-10 (Namespace integrity + stale-vector detection)
+
+Fixes from a fresh-eyes review of the whole engine. Two of these were silent-divergence bugs in production; the worst one was eating consolidated memories.
+
+### Fixed
+- **Nyx consolidation lost memories across the namespace boundary.** All three memory-creating sites in the consolidation phases (merge super-memories, weave bridge insights, synthesis insights) inserted without a `namespace` column, so every Nyx output landed in `default` regardless of `MNEMOS_NAMESPACE`. On a namespaced deployment the cycle archived visible source memories and replaced them with rows that no namespace-filtered search could ever return: silent memory attrition, one consolidation run at a time. The phases now resolve the active namespace exactly like the MCP server and CLI do. (On the production store this had orphaned 231 of 323 active memories, including every consolidated insight since the package migration; repaired by a one-time namespace update.) Note: cluster *selection* still operates store-wide; multi-tenant stores should run one Nyx pass per namespace until selection is namespace-scoped.
+- **Stale vectors were undetectable.** `embed_meta.text_hash` existed in the schema and `embed.text_hash()` existed in code, but nothing ever wrote or read them. A content update whose re-embedding failed (model cold-start, OOM) kept the old vector with no record that it no longer matched the text, and `embed_status()` only counted missing embeddings. Now: `store_memory`/`update_memory` thread the canonical embed-text hash into `_store_embedding`; `embed_status()` reports `stale` (hash mismatch) and `unverified` (no recorded hash) alongside `missing`. Hash comparison is prefix-aware so 16-char truncated hashes written by older external tooling verify without forcing a re-embed.
+- **`update()` hid re-embed failure.** `store_memory` reported `"embedded": bool`; `update()` reported nothing. It now returns `"embedded"` whenever re-embedding was attempted, plus a warning when the vector is left stale.
+- **Hard delete orphaned the link graph.** `delete_memory(hard=True)` removed the memory and its embedding but left `memory_links` rows pointing at the dead id forever. Links are now pruned in the same operation.
+- **Linked expansion resurfaced archived content.** Neither `get_links` nor the `include_linked` BFS filtered by status, so archived memories' content appeared in `linked_memories` summaries of active results. Summaries now skip non-active memories.
+- **A silent reranker failure mass-wrote spurious links.** `rerank()` degrades by returning documents unscored; `_detect_contradictions` then scored every candidate at sigmoid(0) = 0.5, which lands inside the `relates` band (0.35..0.60), writing a `relates` link for every vec-gated candidate on any reranker hiccup. The pipeline now bails when no document carries a rerank score.
+
+### Added
+- `tests/test_v106_features.py` (10 tests; 94 total).
+
 This changelog documents real version history. Mnemos was not built on a
 weekend; it grew through nine internal iterations over months of personal use,
 each one adding or removing features based on what actually improved retrieval

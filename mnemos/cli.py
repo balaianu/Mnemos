@@ -135,6 +135,14 @@ def cmd_reindex_archived(mnemos, args):
     print(json.dumps(mnemos.reindex_archived(), indent=2, ensure_ascii=False))
 
 
+def cmd_remediate_oversized(mnemos, args):
+    result = mnemos.remediate_oversized(
+        min_size=args.min_size, max_size=args.max_size,
+        dry_run=args.dry_run, limit=args.limit,
+    )
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+
+
 def cmd_doctor(mnemos, args):
     report = mnemos.doctor(migrate=getattr(args, "migrate", False))
     if args.json:
@@ -327,6 +335,18 @@ def main(argv=None):
     p = sub.add_parser("reindex-archived",
                        help="Backfill the tier-2 archived vector index (embed all archived memories)")
     p.set_defaults(fn=cmd_reindex_archived)
+
+    # remediate-oversized
+    p = sub.add_parser("remediate-oversized",
+                       help="Split existing oversized memories into atomic siblings (size-guard backfill)")
+    p.add_argument("--min-size", type=int, default=4000,
+                   help="Split memories larger than this many chars (default 4000)")
+    p.add_argument("--max-size", type=int, default=None,
+                   help="Only memories up to this size (defer giants to a later pass)")
+    p.add_argument("--limit", type=int, default=None, help="Process at most N memories")
+    p.add_argument("--dry-run", action="store_true",
+                   help="Report what would be split without changing anything")
+    p.set_defaults(fn=cmd_remediate_oversized)
 
     # doctor
     p = sub.add_parser("doctor", help="Health check (and optional self-repair of schema drift)")

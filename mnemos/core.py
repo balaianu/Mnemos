@@ -78,7 +78,7 @@ class Mnemos:
                      mem_type="fact", layer="semantic", verified=False,
                      subcategory=None, valid_from=None, valid_until=None,
                      consolidation_lock=False,
-                     skip_dedup=False) -> dict:
+                     skip_dedup=False, _no_split=False) -> dict:
         """Store a new memory with full pipeline: dedup → embed → store → contradiction check."""
         if not project or not content:
             return {"error": "project and content are required"}
@@ -109,6 +109,18 @@ class Mnemos:
         if layer not in VALID_LAYERS:
             layer = "semantic"
         importance = max(1, min(10, int(importance)))
+
+        # Size-guard (v10.8.0): split oversized content into atomic sibling
+        # memories, losslessly and without an LLM, so no single memory balloons
+        # past the threshold. Skipped for consolidation_lock (intentional whole
+        # prose) and when the caller already split (an un-splittable single line).
+        from .splitter import split_enabled, needs_split
+        if (not _no_split and not consolidation_lock and split_enabled()
+                and needs_split(content)):
+            return self._store_split(
+                project, content, tags, importance, mem_type, layer,
+                verified, subcategory, valid_from, valid_until,
+            )
 
         # Dedup check
         cached_embedding = None
@@ -181,6 +193,152 @@ class Mnemos:
                 )
 
         return result
+
+    def _store_split(self, project, content, tags, importance, mem_type, layer,
+                     verified, subcategory, valid_from, valid_until):
+        """Store oversized content as atomic sibling memories, losslessly.
+
+        Splits content with the mechanical line splitter (no LLM, no fact
+        loss), stores each chunk through the normal single-store path so each
+        child is embedded and FTS-indexed correctly, then chains the children
+        with 'related' links into a traceable cluster. Returns a summary with
+        all child ids. Phase 1 layers a hub plus parent/child links on top.
+        """
+        from .splitter import split_content, split_is_lossless
+        chunks = split_content(content)
+        # Never risk losing a fact: if the mechanical split is not provably
+        # lossless (or did not actually split), store the original whole.
+        if len(chunks) <= 1 or not split_is_lossless(content, chunks):
+            return self.store_memory(
+                project, content, tags=tags, importance=importance,
+                mem_type=mem_type, layer=layer, verified=verified,
+                subcategory=subcategory, valid_from=valid_from,
+                valid_until=valid_until, skip_dedup=True, _no_split=True,
+            )
+        base = (tags or "").strip(",")
+        n = len(chunks)
+        ids = []
+        for i, ch in enumerate(chunks):
+            extra = f"split-part:{i + 1}/{n},nyx-split"
+            child_tags = f"{base},{extra}" if base else extra
+            res = self.store_memory(
+                project, ch, tags=child_tags, importance=importance,
+                mem_type=mem_type, layer=layer, verified=verified,
+                subcategory=subcategory, valid_from=valid_from,
+                valid_until=valid_until, skip_dedup=True, _no_split=True,
+            )
+            if res.get("id"):
+                ids.append(res["id"])
+        # Chain siblings with 'related' links so the cluster is walkable without
+        # an O(n^2) mesh. Phase 1 replaces this with a hub plus parent/child.
+        for a, b in zip(ids, ids[1:]):
+            self.store.store_link(a, b, "related", strength=0.6)
+        return {
+            "status": "stored-split", "ids": ids, "parts": len(ids),
+            "project": project, "importance": importance, "type": mem_type,
+            "layer": layer,
+        }
+
+    def remediate_oversized(self, min_size=4000, max_size=None, dry_run=False, limit=None):
+        """Split existing oversized active memories into atomic sibling memories.
+
+        For each active, non-consolidation_lock memory in this namespace whose
+        content exceeds min_size (and is at most max_size when given): split it
+        losslessly with the mechanical splitter, store the chunks as atomic
+        siblings inheriting project/type/layer/importance/subcategory/valid_*/
+        verified, tag each child split-from:#<orig>, chain them with 'related'
+        links, re-point the original's links onto the first child, then archive
+        the original and move its vector to the tier-2 archived index. All
+        mutations go through store APIs so FTS and vec stay consistent. Returns
+        a summary dict. Reuses the same splitter as the live store path.
+        """
+        if not hasattr(self.store, "_get_conn"):
+            return {"error": "remediate-oversized requires the SQLite backend"}
+        from .splitter import split_content, split_is_lossless
+
+        conn = self.store._get_conn()
+        clause = "length(content) > ?"
+        params = [min_size]
+        if max_size:
+            clause += " AND length(content) <= ?"
+            params.append(max_size)
+        params.append(self.namespace)
+        rows = conn.execute(
+            f"SELECT id FROM memories WHERE status='active' AND consolidation_lock=0 "
+            f"AND {clause} AND namespace=? ORDER BY length(content) DESC",
+            params,
+        ).fetchall()
+        ids = [r["id"] for r in rows]
+        if limit:
+            ids = ids[:limit]
+
+        summary = {
+            "scanned": len(ids), "split": 0, "children_created": 0,
+            "archived": 0, "skipped_unsplittable": 0, "errors": 0,
+            "dry_run": dry_run, "min_size": min_size, "max_size": max_size,
+        }
+
+        prev_contra = self.enable_contradiction_detection
+        self.enable_contradiction_detection = False  # bulk: skip per-child LLM checks
+        try:
+            for oid in ids:
+                try:
+                    mem = self.store.get_memory(oid, increment_access=False)
+                    if not mem:
+                        continue
+                    chunks = split_content(mem.content)
+                    if len(chunks) <= 1 or not split_is_lossless(mem.content, chunks):
+                        summary["skipped_unsplittable"] += 1
+                        continue
+                    if dry_run:
+                        summary["split"] += 1
+                        summary["children_created"] += len(chunks)
+                        continue
+                    base = (mem.tags or "").strip(",")
+                    marker = f"split-from:#{oid}"
+                    n = len(chunks)
+                    child_ids = []
+                    for i, ch in enumerate(chunks):
+                        parts = [base, f"split-part:{i + 1}/{n}", marker, "nyx-split"]
+                        ctags = ",".join(t for t in parts if t)
+                        res = self.store_memory(
+                            mem.project, ch, tags=ctags, importance=mem.importance,
+                            mem_type=mem.type, layer=mem.layer,
+                            verified=bool(mem.verified), subcategory=mem.subcategory,
+                            valid_from=mem.valid_from, valid_until=mem.valid_until,
+                            skip_dedup=True, _no_split=True,
+                        )
+                        if res.get("id"):
+                            child_ids.append(res["id"])
+                    if not child_ids:
+                        summary["errors"] += 1
+                        continue
+                    for a, b in zip(child_ids, child_ids[1:]):
+                        self.store.store_link(a, b, "related", strength=0.6)
+                    # Re-point the original's links onto the first child so the
+                    # graph stays connected after the parent is archived.
+                    for l in self.store.get_links([oid]).get(oid, []):
+                        other = l.get("linked_id")
+                        if other and other != oid and other not in child_ids:
+                            self.store.store_link(
+                                child_ids[0], other,
+                                l.get("relation", "related"),
+                                l.get("strength", 0.5),
+                            )
+                    self.store.delete_memory(oid, hard=False)
+                    if hasattr(self.store, "move_embedding_to_archive"):
+                        try:
+                            self.store.move_embedding_to_archive(oid)
+                        except Exception:
+                            pass
+                    summary["split"] += 1
+                    summary["children_created"] += len(child_ids)
+                    summary["archived"] += 1
+                except Exception:
+                    summary["errors"] += 1
+        finally:
+            self.enable_contradiction_detection = prev_contra
+        return summary
 
     def _unified_dedup(self, content, project, tags, mem_type="", layer=""):
         """3-way dedup: FTS + CML + vec → cross-encoder rerank → confidence."""

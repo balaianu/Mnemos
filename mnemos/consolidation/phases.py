@@ -33,6 +33,7 @@ from .prompts import (
     SYNTHESIS_SYSTEM, SYNTHESIS_SYSTEM_PROSE, TRIAGE_SYSTEM,
 )
 from ..embed import embed as fastembed_embed_raw, text_hash, prep_memory_text
+from ..splitter import split_content, split_is_lossless, needs_split, split_enabled
 from ..constants import (
     SKIP_IMPORTANCE, MAX_CLUSTER_SIZE,
     FASTEMBED_MODEL, FASTEMBED_DIMS, CML_MODE,
@@ -406,14 +407,53 @@ def apply_merge(conn, cluster_ids, merged_content, mem_by_id):
     # same write window.
     try:
         conn.execute("BEGIN")
-        conn.execute(
-            "INSERT INTO memories (namespace, project, content, tags, importance, type, verified, "
-            "consolidation_lock, layer, last_confirmed) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'semantic', ?)",
-            (_active_namespace(), project, merged_content, ",".join(sorted(all_tags)), max_importance,
-             inherit_type, inherit_verified, inherit_lock, inherit_confirmed),
-        )
-        new_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        tag_str = ",".join(sorted(all_tags))
+
+        # Size-guard (v10.8.0): never emit an oversized merged memory. Split
+        # losslessly into atomic siblings (no LLM, no fact loss); the primary
+        # (first) id is returned so the caller's lineage contract is unchanged,
+        # the rest are chained with 'related' links. consolidation_lock
+        # clusters are kept whole.
+        chunks = [merged_content]
+        if split_enabled() and not inherit_lock and needs_split(merged_content):
+            cand = split_content(merged_content)
+            if len(cand) > 1 and split_is_lossless(merged_content, cand):
+                chunks = cand
+
+        new_ids = []
+        n = len(chunks)
+        for i, ch in enumerate(chunks):
+            ctags = tag_str if n == 1 else f"{tag_str},split-part:{i + 1}/{n}"
+            conn.execute(
+                "INSERT INTO memories (namespace, project, content, tags, importance, type, verified, "
+                "consolidation_lock, layer, last_confirmed) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'semantic', ?)",
+                (_active_namespace(), project, ch, ctags, max_importance,
+                 inherit_type, inherit_verified, inherit_lock, inherit_confirmed),
+            )
+            cid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            new_ids.append(cid)
+
+            # Embed each child inside the same transaction. A failure bubbles
+            # out and the outer except ROLLBACKs the whole merge.
+            text = prep_memory_text(project, ch, ctags,
+                                    mem_type=inherit_type, layer="semantic")
+            emb = fastembed_embed([text])
+            if not (emb and emb[0]):
+                raise RuntimeError("fastembed returned empty embedding")
+            store_embeddings(conn, [(
+                "memory", cid, text_hash(text), emb[0]
+            )], model=FASTEMBED_MODEL)
+
+        new_id = new_ids[0]
+
+        # Chain split siblings so the cluster is walkable (no-op when n == 1).
+        for a, b in zip(new_ids, new_ids[1:]):
+            conn.execute(
+                "INSERT OR IGNORE INTO memory_links (source_id, target_id, relation_type, strength) "
+                "VALUES (?, ?, 'related', 0.6)",
+                (a, b),
+            )
 
         for mid in cluster_ids:
             conn.execute(
@@ -423,21 +463,6 @@ def apply_merge(conn, cluster_ids, merged_content, mem_by_id):
                 "WHERE id = ?",
                 (str(new_id), mid),
             )
-
-        # Embed inside the same transaction. layer="semantic" matches the
-        # INSERT above and keeps prep_memory_text consistent with stored
-        # metadata. If fastembed_embed fails (network, OOM, etc.) the
-        # exception bubbles out and the outer except ROLLBACKs.
-        text = prep_memory_text(project, merged_content,
-                                ",".join(sorted(all_tags)),
-                                mem_type=inherit_type, layer="semantic")
-        emb = fastembed_embed([text])
-        if not (emb and emb[0]):
-            raise RuntimeError("fastembed returned empty embedding")
-        thash = text_hash(text)
-        store_embeddings(conn, [(
-            "memory", new_id, thash, emb[0]
-        )], model=FASTEMBED_MODEL)
 
         conn.commit()
         return new_id

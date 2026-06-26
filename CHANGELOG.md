@@ -4,6 +4,20 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.8.0] - 2026-06-26 (Size-guard splitter: atomic memories)
+
+Memories could grow without bound. A handful had ballooned to tens or hundreds of thousands of characters (worst case 302k), which both pollutes an agent's context when loaded and embeds to a blurry averaged vector that retrieval can barely rank. There was no size limit anywhere, and the merge prompt even said "do not truncate".
+
+### Added
+- **Lossless size-guard splitter** (`mnemos/splitter.py`). Pure mechanical, no LLM, stdlib only: packs whole CML blocks and lines into chunks of at most `MNEMOS_SPLIT_TARGET` (default 2800) characters, never breaking inside a line, so every non-blank fact line lands in exactly one chunk in original order. `split_is_lossless()` verifies the invariant.
+- **Store-path guard.** `core.store_memory` splits content over `MNEMOS_SPLIT_THRESHOLD` (default 4000) into atomic sibling memories, each embedded and FTS-indexed, chained with 'related' links. Skipped for `consolidation_lock`. An internal `_no_split` flag prevents recursion on an un-splittable single line.
+- **Consolidation guard.** The Phase 2 merge site (`apply_merge`) never emits an oversized merged memory: it splits losslessly into atomic siblings inside the same transaction and returns the primary id, so the lineage contract is unchanged.
+- **`mnemos remediate-oversized`** (`--min-size`, `--max-size`, `--limit`, `--dry-run`): backfill that splits existing oversized active memories into atomic siblings, archives the original (vector moved to the tier-2 index), and re-points links onto the first child. Reuses the same splitter as the live path.
+- `tests/test_splitter.py`, `tests/test_v108_split.py` (lossless property, size bound, consolidation_lock skip, store-path split, remediation backfill, dry-run).
+
+### Config
+- `MNEMOS_SPLIT_THRESHOLD` (default 4000), `MNEMOS_SPLIT_TARGET` (default 2800), `MNEMOS_SPLIT_ENABLED` (default on).
+
 ## [10.7.0] - 2026-06-14 (Tier-2 archived recall: keep merged-away vectors)
 
 Consolidation used to delete the embedding of every memory it archived, so the only path to a merged-away original was `expand_merged`, which joins a found consolidated memory to its sources by lineage. That join can only surface originals whose consolidated parent already ranked in primary search. If consolidation summarized away a detail, a query matching that detail would not rank the parent, and the original became unrecallable by vector search. There was no independent vector path to archived content.

@@ -139,7 +139,7 @@ def cmd_remediate_oversized(mnemos, args):
     result = mnemos.remediate_oversized(
         min_size=args.min_size, max_size=args.max_size,
         dry_run=args.dry_run, limit=args.limit,
-        include_archived=args.include_archived,
+        include_archived=args.include_archived, hard=args.hard,
     )
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
@@ -349,6 +349,8 @@ def main(argv=None):
                    help="Report what would be split without changing anything")
     p.add_argument("--include-archived", action="store_true",
                    help="Also split archived (tier-2) memories; children stay archived")
+    p.add_argument("--hard", action="store_true",
+                   help="Sentence-split over-target single lines (last resort for un-line-splittable blobs)")
     p.set_defaults(fn=cmd_remediate_oversized)
 
     # doctor

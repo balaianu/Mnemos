@@ -215,7 +215,10 @@ class Mnemos:
                 subcategory=subcategory, valid_from=valid_from,
                 valid_until=valid_until, skip_dedup=True, _no_split=True,
             )
-        base = (tags or "").strip(",")
+        base = ",".join(
+            t for t in (tags or "").split(",")
+            if t and not t.startswith(("split-from:#", "split-part:"))
+        )
         n = len(chunks)
         ids = []
         for i, ch in enumerate(chunks):
@@ -240,7 +243,7 @@ class Mnemos:
         }
 
     def remediate_oversized(self, min_size=4000, max_size=None, dry_run=False, limit=None,
-                            include_archived=False):
+                            include_archived=False, hard=False):
         """Split existing oversized active memories into atomic sibling memories.
 
         For each active, non-consolidation_lock memory in this namespace whose
@@ -255,7 +258,7 @@ class Mnemos:
         """
         if not hasattr(self.store, "_get_conn"):
             return {"error": "remediate-oversized requires the SQLite backend"}
-        from .splitter import split_content, split_is_lossless
+        from .splitter import split_content, split_is_lossless, split_preserves_all_sentences
 
         conn = self.store._get_conn()
         clause = "length(content) > ?"
@@ -271,6 +274,20 @@ class Mnemos:
             params,
         ).fetchall()
         ids = [r["id"] for r in rows]
+        # Idempotency: skip memories that already have split children, so a
+        # re-run (e.g. with hard=True for the single-line residue) never
+        # double-splits the already-atomized backlog.
+        done = set()
+        for r in conn.execute(
+            "SELECT tags FROM memories WHERE tags LIKE '%split-from:#%' AND namespace=?",
+            (self.namespace,),
+        ):
+            # findall, not search: a re-split child inherits its parent's
+            # split-from:#grandparent, so a single match would mark the
+            # grandparent done but never the immediate parent (infinite re-split).
+            for gid in re.findall(r"split-from:#(\d+)", r["tags"] or ""):
+                done.add(int(gid))
+        ids = [i for i in ids if i not in done]
         if limit:
             ids = ids[:limit]
 
@@ -288,15 +305,19 @@ class Mnemos:
                     mem = self.store.get_memory(oid, increment_access=False)
                     if not mem:
                         continue
-                    chunks = split_content(mem.content)
-                    if len(chunks) <= 1 or not split_is_lossless(mem.content, chunks):
+                    chunks = split_content(mem.content, hard=hard)
+                    gate = split_preserves_all_sentences if hard else split_is_lossless
+                    if len(chunks) <= 1 or not gate(mem.content, chunks):
                         summary["skipped_unsplittable"] += 1
                         continue
                     if dry_run:
                         summary["split"] += 1
                         summary["children_created"] += len(chunks)
                         continue
-                    base = (mem.tags or "").strip(",")
+                    base = ",".join(
+                        t for t in (mem.tags or "").split(",")
+                        if t and not t.startswith(("split-from:#", "split-part:"))
+                    )
                     marker = f"split-from:#{oid}"
                     n = len(chunks)
                     child_ids = []

@@ -4,6 +4,17 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.9.2] - 2026-06-27 (Sentence-split fallback, embedder-aligned target, cascade fix)
+
+### Added
+- Hard-mode sentence splitting (`split_content(..., hard=True)`, `mnemos remediate-oversized --hard`): a single line that exceeds target (the one thing the line splitter cannot break) is split on sentence/clause boundaries as a last resort, sentence-level lossless (verified by `split_preserves_all_sentences`). Atomizes structured single-line blobs that line-splitting leaves whole.
+
+### Changed
+- Default `MNEMOS_SPLIT_TARGET` 2800 -> 2400, aligned to the e5-large embedder window (~512 tokens, ~2000-2500 chars). Content past the window is truncated out of the embedding vector, so a larger target silently hurts vector recall.
+
+### Fixed
+- Re-split cascade: when a memory that was itself a split child got re-split, the new children inherited the parent's `split-from:#grandparent` tag, and single-match done-detection marked the grandparent (never the parent) as processed, causing infinite re-splitting and duplicate memories. Done-detection now uses `findall` (all ancestors), and child tags strip inherited `split-from`/`split-part` so each child carries exactly one parent marker.
+
 ## [10.9.1] - 2026-06-27 (remediate-oversized: --include-archived)
 
 ### Added

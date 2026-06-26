@@ -16,9 +16,15 @@ store hot path can import it without pulling in consolidation or numpy.
 """
 
 import os
+import re
 
+# Aligned to the e5-large embedder window (~512 tokens, ~2000-2500 chars):
+# content past that is truncated out of the embedding vector, so larger targets
+# silently hurt vector recall. 2400 keeps a whole chunk inside the window.
 SPLIT_THRESHOLD = int(os.environ.get("MNEMOS_SPLIT_THRESHOLD", "4000"))
-SPLIT_TARGET = int(os.environ.get("MNEMOS_SPLIT_TARGET", "2800"))
+SPLIT_TARGET = int(os.environ.get("MNEMOS_SPLIT_TARGET", "2400"))
+
+_SENT_BOUNDARY = re.compile(r"(?<=[.!?;])\s+")
 
 
 def split_enabled():
@@ -47,7 +53,7 @@ def _blocks(content):
     return blocks
 
 
-def split_content(content, threshold=None, target=None):
+def split_content(content, threshold=None, target=None, hard=False):
     """Split content into atomic chunks, losslessly.
 
     Returns a list of chunk strings. If content is within `threshold` (or empty
@@ -57,7 +63,13 @@ def split_content(content, threshold=None, target=None):
     line, so every fact stays verbatim and every non-blank line appears in
     exactly one chunk, in original order. Blank separator lines are normalized.
 
-    Verify the guarantee with split_is_lossless(original, chunks).
+    With hard=True, a single line that itself exceeds `target` (the only thing
+    the line splitter cannot otherwise break) is split on sentence boundaries
+    as a last resort. That trades strict line-losslessness for sentence-level
+    losslessness on that line; verify hard splits with
+    split_preserves_all_sentences instead of split_is_lossless.
+
+    Verify a normal (non-hard) split with split_is_lossless(original, chunks).
     """
     threshold = SPLIT_THRESHOLD if threshold is None else threshold
     target = SPLIT_TARGET if target is None else target
@@ -89,13 +101,17 @@ def split_content(content, threshold=None, target=None):
 
         if block_len > target:
             # Oversized single block: flush what we have, then pack its lines.
+            # In hard mode, a single line longer than target is split on
+            # sentence boundaries (last resort, sentence-level lossless).
             flush()
             for line in block:
-                add = len(line) + 1
-                if cur and cur_len + add > target:
-                    flush()
-                cur.append(line)
-                cur_len += add
+                segs = _split_long_line(line, target) if hard else [line]
+                for seg in segs:
+                    add = len(seg) + 1
+                    if cur and cur_len + add > target:
+                        flush()
+                    cur.append(seg)
+                    cur_len += add
             flush()
             continue
 
@@ -130,6 +146,53 @@ def split_is_lossless(original, chunks):
 def needs_split(content, threshold=None):
     threshold = SPLIT_THRESHOLD if threshold is None else threshold
     return bool(content) and len(content) > threshold
+
+
+def _split_long_line(line, target):
+    """Last-resort split of a single over-target line on sentence/clause
+    boundaries (. ! ? ;), packing sentences into pieces of at most `target`
+    chars. Sentences are kept verbatim; a lone sentence over target is emitted
+    whole. Sentence-level lossless: the sentence sequence is preserved (only
+    inter-sentence whitespace is normalized).
+    """
+    if len(line) <= target:
+        return [line]
+    pieces, cur, cur_len = [], [], 0
+    for s in _SENT_BOUNDARY.split(line):
+        add = len(s) + 1
+        if cur and cur_len + add > target:
+            pieces.append(" ".join(cur))
+            cur, cur_len = [], 0
+        cur.append(s)
+        cur_len += add
+    if cur:
+        pieces.append(" ".join(cur))
+    return pieces or [line]
+
+
+def _sentences(text):
+    out = []
+    for line in (text or "").split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        for s in _SENT_BOUNDARY.split(line):
+            s = re.sub(r"\s+", " ", s).strip()
+            if s:
+                out.append(s)
+    return out
+
+
+def split_preserves_all_sentences(original, chunks):
+    """Sentence-level lossless check for HARD splits (which may break an
+    over-target single line on sentence boundaries, so the strict line check
+    does not apply). Multiset of whitespace-normalized sentences must match:
+    nothing dropped, duplicated, or paraphrased.
+    """
+    from collections import Counter
+    return Counter(_sentences(original)) == Counter(
+        s for c in chunks for s in _sentences(c)
+    )
 
 
 def split_preserves_all_lines(original, chunks):

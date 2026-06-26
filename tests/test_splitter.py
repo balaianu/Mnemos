@@ -5,6 +5,7 @@ import re
 from mnemos.splitter import (
     split_content, split_is_lossless, needs_split, _nonblank_lines,
     topic_sort, split_preserves_all_lines,
+    split_preserves_all_sentences, _split_long_line,
 )
 
 
@@ -123,6 +124,33 @@ def test_topic_sort_oversized_topic_subsplit():
     for _, c in groups:
         assert len(c) <= 2800 or len(_nonblank_lines(c)) == 1
     assert split_preserves_all_lines(blob, [c for _, c in groups])
+
+
+def test_split_long_line_sentence_pack():
+    line = " ".join(f"Fact number {i} about the subject here." for i in range(200))
+    pieces = _split_long_line(line, 300)
+    assert len(pieces) > 1
+    for p in pieces:
+        assert len(p) <= 300 or len(p.split(". ")) == 1  # within target or one sentence
+    assert split_preserves_all_sentences(line, pieces)
+
+
+def test_split_content_hard_breaks_single_giant_line():
+    giant = " ".join(f"Sentence {i} with some content." for i in range(500))
+    assert len(giant) > 4000 and "\n" not in giant
+    soft = split_content(giant, threshold=2000, target=2400)            # cannot break a line
+    assert len(soft) == 1
+    hard = split_content(giant, threshold=2000, target=2400, hard=True)  # breaks on sentences
+    assert len(hard) > 1
+    for c in hard:
+        assert len(c) <= 2400 or len(c.split(". ")) == 1
+    assert split_preserves_all_sentences(giant, hard)
+
+
+def test_split_preserves_all_sentences_multiset():
+    orig = "F:alpha. F:beta. F:gamma."
+    assert split_preserves_all_sentences(orig, ["F:gamma.", "F:alpha. F:beta."])  # reordered ok
+    assert not split_preserves_all_sentences(orig, ["F:alpha. F:beta."])          # missing gamma
 
 
 def test_topic_sort_trailing_whitespace_tail_no_fallback():

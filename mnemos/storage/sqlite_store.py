@@ -101,6 +101,11 @@ class SQLiteStore(MnemosStore):
         self._conn = _ensure_vec_db(self.db_path)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA synchronous=NORMAL")
+        # Wait out cross-process write contention instead of raising SQLITE_BUSY.
+        # The MCP server, the (now prod-default) CLI, and the Nyx consolidation
+        # run are separate processes against one DB; WAL handles reader/writer
+        # but write-vs-write still needs a timeout or one side's write throws.
+        self._conn.execute("PRAGMA busy_timeout=5000")
         self._conn.execute("PRAGMA cache_size=-200000")  # 200MB page cache
         self.init_schema()
         return self._conn
@@ -123,12 +128,26 @@ class SQLiteStore(MnemosStore):
         omit WAL-resident rows and, when restored next to a stale -wal/-shm,
         replays mismatched frames and corrupts the btree (the failure mode that
         took out prod on 2026-06-27). Always use this instead of `cp`.
+
+        Atomic: writes to a temp sibling then os.replace()s it into place, so a
+        failed VACUUM (disk full, I/O error) never destroys an existing prior
+        backup at dest_path. Resolves dest to an absolute path and creates the
+        parent dir if missing. Returns the absolute path written.
         """
+        dest_path = os.path.abspath(dest_path)
+        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
         conn = self._get_conn()
         conn.commit()  # VACUUM requires no open transaction
-        if os.path.exists(dest_path):
-            os.remove(dest_path)  # VACUUM INTO refuses to overwrite
-        conn.execute("VACUUM INTO ?", (dest_path,))
+        tmp = dest_path + ".tmp"
+        if os.path.exists(tmp):
+            os.remove(tmp)  # VACUUM INTO refuses to write an existing file
+        try:
+            conn.execute("VACUUM INTO ?", (tmp,))
+        except Exception:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+            raise  # dest_path was never touched, prior backup survives
+        os.replace(tmp, dest_path)  # atomic on the same filesystem
         return dest_path
 
     # --- Schema ---

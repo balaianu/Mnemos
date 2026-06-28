@@ -15,6 +15,7 @@ making Mnemos backend-agnostic.
 
 import math
 import re
+import sqlite3
 from typing import Optional
 
 from .storage.base import MnemosStore, Memory
@@ -37,6 +38,29 @@ CML_TYPE_PREFIXES = ("D:", "C:", "F:", "L:", "P:", "W:")
 
 def _sigmoid(x):
     return 1.0 / (1.0 + math.exp(-x))
+
+
+def _summarize_quick_check(rows):
+    """Reduce PRAGMA quick_check output to (ok, summary). quick_check yields a
+    single 'ok' row when clean, or one row per problem when corrupt; report the
+    first few plus a count so the extent of corruption isn't hidden."""
+    msgs = [r[0] for r in rows] or ["ok"]
+    if msgs == ["ok"]:
+        return True, "ok"
+    shown = "; ".join(msgs[:3])
+    if len(msgs) > 3:
+        shown += f"; (+{len(msgs) - 3} more)"
+    return False, shown
+
+
+def _corruption_hint(exc):
+    """If exc looks like SQLite on-disk corruption, return an actionable hint,
+    else None. Turns a raw 'database disk image is malformed' into guidance."""
+    msg = str(exc).lower()
+    if "malformed" in msg or "disk image" in msg or "not a database" in msg:
+        return ("the database may be corrupted; run `mnemos doctor` to check "
+                "and restore the latest `mnemos backup` snapshot if needed")
+    return None
 
 
 def _extract_cml_subject(content):
@@ -665,7 +689,19 @@ class Mnemos:
 
     # --- Search ---
 
-    def search(self, query, project=None, subcategory=None, layer=None,
+    def search(self, *args, **kwargs):
+        """Public search entry: delegates to _search_impl and converts a raw
+        SQLite corruption error into an actionable `mnemos doctor` hint (the
+        failure mode that surfaced opaquely at search time on 2026-06-27)."""
+        try:
+            return self._search_impl(*args, **kwargs)
+        except sqlite3.DatabaseError as e:
+            hint = _corruption_hint(e)
+            if hint:
+                raise sqlite3.DatabaseError(f"{e}; {hint}") from e
+            raise
+
+    def _search_impl(self, query, project=None, subcategory=None, layer=None,
                type_filter=None, status="active", valid_only=False,
                search_mode=None, limit=20, auto_widen=True,
                expand_merged=False, snippet_chars=None,
@@ -1474,11 +1510,13 @@ class Mnemos:
         # blow-up at search time. quick_check is much faster than the full
         # integrity_check on a large corpus and still catches this class.
         try:
-            ic = conn.execute("PRAGMA quick_check").fetchone()[0]
-            if ic == "ok":
+            ok, summary = _summarize_quick_check(
+                conn.execute("PRAGMA quick_check").fetchall()
+            )
+            if ok:
                 report["checks"].append("Integrity check passed (quick_check)")
             else:
-                report["issues"].append(f"Integrity check FAILED: {ic}")
+                report["issues"].append(f"Integrity check FAILED: {summary}")
         except Exception as e:
             report["issues"].append(f"Integrity check error: {e}")
 

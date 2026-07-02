@@ -81,6 +81,45 @@ DEFAULT_CONTRADICT_MODE = os.environ.get(
 # --- Dedup rerank threshold ---
 DEDUP_RERANK_THRESHOLD = 0.85  # raised from 0.70: 0.70 over-blocked related-but-distinct memories (reranker scored genuinely distinct facts 0.81-0.84). Bias toward false-store (Nyx merges dups later) over false-block (silent memory loss).
 
+# --- NLI decision layer (v10.15.0, bench-backed: benchmarks/nli-bench) ---
+# The NLI layer replaces the cross-encoder for the store DECISION questions
+# (duplicate? contradiction?). The reranker stays for search ranking, where
+# topicality is the right signal. Language routing is agnostic: English
+# content uses NLI_EN_MODEL (strongest benched), everything else uses the
+# multilingual NLI_MULTI_MODEL.
+NLI_EN_MODEL = os.environ.get(
+    "MNEMOS_NLI_EN_MODEL", "MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli")
+NLI_MULTI_MODEL = os.environ.get(
+    "MNEMOS_NLI_MULTI_MODEL",
+    "MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7")
+NLI_MAX_LENGTH = 512
+
+# Store-path thresholds. Contradiction: max-direction P(contra) at 0.98
+# scored AUC 0.939 with 2 false positives on the bench. Dedup: min-direction
+# P(entail) (bidirectional entailment) at 0.85 scored AUC 0.983 with 1 false
+# positive, vs 16-21 false blocks for the raw vec-distance blocker.
+NLI_CONTRA_THRESHOLD = float(os.environ.get("MNEMOS_NLI_CONTRA_THRESHOLD", "0.98"))
+NLI_DEDUP_THRESHOLD = float(os.environ.get("MNEMOS_NLI_DEDUP_THRESHOLD", "0.85"))
+NLI_DEDUP_MAX_CANDIDATES = int(os.environ.get("MNEMOS_NLI_DEDUP_MAX_CANDIDATES", "3"))
+
+# Dedup confirm tier: 'rerank' (legacy cross-encoder / vec fallback) or 'nli'.
+# Read at call time so tests and long-lived processes can flip it via env.
+DEDUP_CONFIRM_DEFAULT = "rerank"
+
+# Nyx phase-4 contradiction finder. 'cosine' keeps the legacy similarity
+# band; 'nli' drops the band ceiling (near-identical pairs are where real
+# contradictions live) and scores candidate pairs with the line-level NLI
+# finder, recall-first, before the LLM judge.
+NYX_CONTRADICT_FINDER_DEFAULT = "cosine"
+NLI_FINDER_THRESHOLD = float(os.environ.get("MNEMOS_NLI_FINDER_THRESHOLD", "0.8"))
+NLI_FINDER_MAX_PAIRS = int(os.environ.get("MNEMOS_NLI_FINDER_MAX_PAIRS", "200"))
+
+# Phase-4 cosine gates (moved here from consolidation/phases.py so tunables
+# live in one place). Floor applies in both finder modes; ceiling only in
+# legacy cosine mode.
+CONTRADICT_MIN_SIM = float(os.environ.get("MNEMOS_CONTRADICT_MIN_SIM", "0.60"))
+CONTRADICT_MAX_SIM = float(os.environ.get("MNEMOS_CONTRADICT_MAX_SIM", "0.85"))
+
 # --- Default valid enums (these are conventions, not enforced by storage) ---
 # Projects are free-form strings. The list below is just a sensible starter
 # set; add or remove categories to match how you organize your memory. The

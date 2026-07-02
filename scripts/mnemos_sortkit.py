@@ -20,7 +20,7 @@ Subcommands:
                        Without --commit it only reports what it would do.
 
 Usage:
-  MNEMOS_DB=/root/work/memory.db MNEMOS_NAMESPACE=mikael \\
+  MNEMOS_DB=/root/work/memory.db MNEMOS_NAMESPACE=<your-namespace> \\
     /root/venvs/ai/bin/python scripts/mnemos_sortkit.py <cmd> ...
 """
 import json
@@ -35,7 +35,7 @@ _COLS = ("id", "namespace", "project", "type", "importance", "subcategory",
 
 def _mnemos():
     from mnemos.core import Mnemos
-    return Mnemos(namespace=os.environ.get("MNEMOS_NAMESPACE", "mikael"),
+    return Mnemos(namespace=os.environ.get("MNEMOS_NAMESPACE", "default"),
                   enable_rerank=False, enable_contradiction_detection=False)
 
 

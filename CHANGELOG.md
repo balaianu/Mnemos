@@ -4,6 +4,23 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.15.0] - 2026-07-02 (NLI decision layer: entailment-based dedup confirm, contradiction detection, Nyx phase-4 finder)
+
+Replaces the cross-encoder reranker for the store DECISION questions (is this a duplicate? does this contradict?) with natural-language-inference models. A reranker scores topicality ("same topic?"); NLI scores polarity ("same claim? opposite claim?"), which is the question the store layer actually asks. Backed by a 114-pair benchmark on real production memories (benchmarks/nli-bench): contradiction AUC 0.939 vs 0.69 for the reranker (which produced ~40 false positives of 96 negatives at its best threshold); dedup AUC 0.983 with 1 false positive vs 16-21 false blocks for the raw vec-distance blocker. The reranker keeps its search-ranking role, where topicality is the right signal.
+
+### Added
+- `mnemos/nli.py`: NLI scoring layer. Language-agnostic routing: content that reads as English (cheap stopword heuristic, `is_english()`) uses an English ANLI+FEVER-hardened checkpoint (strongest benched); everything else uses a multilingual XNLI checkpoint (~100 languages). `p_contradiction()` takes the max over both premise/hypothesis directions (real contradictions score asymmetrically: 0.44 one way, 0.99 the other on the bench); `bidirectional_entailment()` takes the min (a duplicate entails in both directions); `line_max_contradiction()` scores the top-k cosine-preselected line pairs of two records, rescuing conflicts that blob-level scoring buries (benched: a diagnosis conflict scored 0.58 blob-level, 0.9956 line-level).
+- `MNEMOS_DEDUP_CONFIRM=nli`: store-path dedup confirm tier. Bidirectional entailment >= `MNEMOS_NLI_DEDUP_THRESHOLD` (default 0.85) on the top `MNEMOS_NLI_DEDUP_MAX_CANDIDATES` (default 3) candidates by vector distance blocks the store; below it the store proceeds with no fall-through to the coarser scorers. Legacy behavior unchanged when unset or when the NLI runtime is unavailable.
+- `MNEMOS_CONTRADICT_MODE=nli`: contradiction detection asks the NLI question directly after the vec gate. Warn + `contradicts` link only at max-direction P(contra) >= `MNEMOS_NLI_CONTRA_THRESHOLD` (default 0.98). No relates band: WEAVE owns topical linking.
+- `MNEMOS_NYX_CONTRADICT_FINDER=nli`: phase-4 candidate finder. Drops the legacy cosine-band CEILING (near-identical pairs are where real contradictions live) and scores floor-gated pairs with the line-level finder, recall-first (`MNEMOS_NLI_FINDER_THRESHOLD`, default 0.8, capped at `MNEMOS_NLI_FINDER_MAX_PAIRS` pairs); the existing LLM judge keeps precision. The three benched real contradictions the blob/band approach missed are all caught by this path.
+- Optional dependency extra `mnemos[nli]` (torch, transformers, sentencepiece). Every NLI entry point degrades gracefully when the extra is not installed.
+- `tests/test_v1015_nli.py`: 19 tests (routing, direction aggregation, store integrations, phase-4 selection), model-free via stub scorers.
+
+### Changed
+- Phase-4 cosine gates `CONTRADICT_MIN_SIM`/`CONTRADICT_MAX_SIM` moved from `consolidation/phases.py` to `constants.py` (env-overridable); all new NLI tunables live in `constants.py` as the single settings surface.
+- Phase-4 pair selection extracted into `select_contradict_candidates()` (pure, testable).
+- `scripts/mnemos_sortkit.py` no longer defaults to a deployment-specific namespace.
+
 ## [10.14.0] - 2026-07-02 (external audit fixes: atomic content+vector writes, hybrid vec-only recall, embed_meta migration, exploder boundary tightening)
 
 Response to an independent full-code audit of v10.13.0 (4 parallel reviewers plus a live DB health audit on a second production deployment, on Windows). Every finding was re-verified against source before fixing; the two partially-refuted ones (model provenance "never written", archive-move "pollutes forever") still carried real cores and are fixed too. Each fix ships with a regression test in `tests/test_v1014_audit_fixes.py` (43 tests).

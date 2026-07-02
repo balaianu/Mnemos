@@ -26,12 +26,14 @@ from .storage.sqlite_store import SQLiteStore
 from .embed import embed, prep_memory_text, text_hash as embed_text_hash
 from .rerank import rerank, rrf_merge
 from .query import fts_dedup
+from . import nli
 from .constants import (
     HYBRID_MIN_MEMORIES, IMPORTANCE_THRESHOLDS, VEC_DEDUP_MAX_DISTANCE,
     DEDUP_RERANK_THRESHOLD, CONTRADICTION_VEC_THRESHOLD,
     CONTRADICTION_RERANK_MIN, CONTRADICTION_RERANK_HIGH,
     DEFAULT_NAMESPACE, DEFAULT_ENABLE_RERANK, DEFAULT_RETRIEVAL_LOG,
-    DEFAULT_CONTRADICT_MODE,
+    DEFAULT_CONTRADICT_MODE, DEDUP_CONFIRM_DEFAULT,
+    NLI_CONTRA_THRESHOLD, NLI_DEDUP_THRESHOLD, NLI_DEDUP_MAX_CANDIDATES,
     VALID_TYPES, VALID_LAYERS, CML_MODE,
 )
 
@@ -523,6 +525,42 @@ class Mnemos:
         if not candidates:
             return None, embedding
 
+        # NLI confirm tier (MNEMOS_DEDUP_CONFIRM=nli): bidirectional
+        # entailment is the duplicate question asked directly - each side
+        # must entail the other. Replaces the cross-encoder confidence
+        # score, which measures topicality and over-blocks structurally
+        # similar but distinct facts. When NLI says "not a duplicate" that
+        # verdict is final (no fall-through to the coarser scorers); when
+        # the runtime is unavailable the legacy path below takes over.
+        import os as _os
+        confirm_mode = _os.environ.get(
+            "MNEMOS_DEDUP_CONFIRM", DEDUP_CONFIRM_DEFAULT).lower()
+        if confirm_mode == "nli" and nli.is_available():
+            ranked_cands = sorted(
+                candidates.values(),
+                key=lambda c: c.get("vec_distance", float("inf")))
+            best_cand, best_score = None, None
+            for cand in ranked_cands[:NLI_DEDUP_MAX_CANDIDATES]:
+                s = nli.bidirectional_entailment(content, cand["content"])
+                if s is None:
+                    continue
+                if best_score is None or s > best_score:
+                    best_cand, best_score = cand, s
+            if best_score is not None:
+                if best_score < NLI_DEDUP_THRESHOLD:
+                    return None, embedding
+                best_cand["methods"].add("nli")
+                methods = sorted(best_cand["methods"])
+                return {
+                    "existing_id": best_cand["id"],
+                    "confidence": round(best_score, 4),
+                    "methods": methods,
+                    "existing_content": best_cand["content"][:200],
+                    "warning": (f"Likely duplicate ({', '.join(methods)}, "
+                                f"confidence {best_score:.0%})"),
+                    "hint": f"Consider updating #{best_cand['id']} instead",
+                }, embedding
+
         # Score the best candidate. Prefer the cross-encoder; without it, fall
         # back to the actual vector distance rather than a blanket score. The old
         # fallback assigned a flat 0.75 to any coarse (FTS/CML/vec) match, which
@@ -625,6 +663,30 @@ class Mnemos:
         }
         if not memories:
             return []
+
+        # NLI mode: ask the contradiction question directly. Max-direction
+        # P(contradiction) over both premise/hypothesis orders (real
+        # contradictions score asymmetrically), warn + link only at the
+        # high-precision threshold. No relates band: the WEAVE phase owns
+        # topical linking, and the reranker's topicality signal is exactly
+        # what this mode exists to remove.
+        if mode == "nli":
+            if not nli.is_available():
+                import sys as _sys
+                print("mnemos: MNEMOS_CONTRADICT_MODE=nli but transformers/"
+                      "torch unavailable; skipping contradiction check "
+                      "(install mnemos[nli])", file=_sys.stderr)
+                return []
+            warnings = []
+            for mid, mem in memories.items():
+                p = nli.p_contradiction(content, mem.content)
+                if p is None or p < NLI_CONTRA_THRESHOLD:
+                    continue
+                self.store.store_link(new_id, mid, "contradicts", round(p, 4))
+                warnings.append(self._contradiction_warning(
+                    mid, mem, p, "contradicts",
+                ))
+            return warnings
 
         # Tier 1-only mode: treat every vec-gated candidate as contradicts.
         # This is the honest path for users who explicitly opt out of

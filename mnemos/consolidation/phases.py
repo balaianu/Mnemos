@@ -41,7 +41,10 @@ from ..constants import (
     SKIP_IMPORTANCE, MAX_CLUSTER_SIZE,
     FASTEMBED_MODEL, FASTEMBED_DIMS, CML_MODE,
     DEFAULT_NAMESPACE,
+    CONTRADICT_MIN_SIM, CONTRADICT_MAX_SIM,
+    NYX_CONTRADICT_FINDER_DEFAULT, NLI_FINDER_THRESHOLD, NLI_FINDER_MAX_PAIRS,
 )
+from .. import nli
 
 
 def _active_namespace():
@@ -118,9 +121,7 @@ TOPIC_THRESHOLD = 0.75    # Tier 1B: same-topic merge
 WEAVE_MIN_SIMILARITY = 0.55  # Cross-category connection minimum
 WEAVE_TOP_K = 3              # Top K cross-category matches per memory
 
-# Phase 4 thresholds
-CONTRADICT_MIN_SIM = 0.60
-CONTRADICT_MAX_SIM = 0.85
+# Phase 4 cosine gates live in ..constants (CONTRADICT_MIN_SIM/MAX_SIM)
 
 # Phase 5
 NYX_PACKET_SIZE = 25
@@ -838,6 +839,35 @@ def _parse_weave_result(text):
 # Phase 4: Contradiction Scan
 # =============================================================================
 
+def select_contradict_candidates(ids, sim_matrix, mem_by_id, mode="cosine",
+                                 min_sim=None, max_sim=None):
+    """Same-project pair selection for the phase-4 contradiction scan.
+
+    mode='cosine' keeps the legacy similarity band [min_sim, max_sim].
+    mode='nli' applies the floor only: the band ceiling excluded
+    near-identical pairs, which is exactly where real contradictions live
+    ("X is 64GB" vs "X is 32GB" sits above 0.85 cosine). In nli mode the
+    line-level finder scores the pairs, so the ceiling has no job.
+    """
+    if min_sim is None:
+        min_sim = CONTRADICT_MIN_SIM
+    if max_sim is None:
+        max_sim = CONTRADICT_MAX_SIM
+    pairs = []
+    for i, mid_a in enumerate(ids):
+        for j in range(i + 1, len(ids)):
+            mid_b = ids[j]
+            if mem_by_id[mid_a]["project"] != mem_by_id[mid_b]["project"]:
+                continue
+            cos = float(sim_matrix[i][j])
+            if cos < min_sim:
+                continue
+            if mode != "nli" and cos > max_sim:
+                continue
+            pairs.append((mid_a, mid_b, cos))
+    return pairs
+
+
 def phase_contradict(conn, mergeable_embeddings, mem_by_id, is_surge, execute=False):
     """Detect decisions that evolved, reversed, or conflict. Returns stats dict."""
     stats = {"candidates": 0, "superseded": 0, "evolved": 0,
@@ -865,20 +895,32 @@ def phase_contradict(conn, mergeable_embeddings, mem_by_id, is_surge, execute=Fa
     ids, sim_matrix = cosine_similarity_matrix(target_embeds)
     id_to_idx = {mid: i for i, mid in enumerate(ids)}
 
-    # Find same-category pairs with moderate similarity
-    candidates = []
-    for i, mid_a in enumerate(ids):
-        for j in range(i + 1, len(ids)):
-            mid_b = ids[j]
-            # Same category only
-            if mem_by_id[mid_a]["project"] != mem_by_id[mid_b]["project"]:
-                continue
-            cos = float(sim_matrix[i][j])
-            if CONTRADICT_MIN_SIM <= cos <= CONTRADICT_MAX_SIM:
-                candidates.append((mid_a, mid_b, cos))
-
+    finder_mode = os.environ.get(
+        "MNEMOS_NYX_CONTRADICT_FINDER", NYX_CONTRADICT_FINDER_DEFAULT).lower()
+    candidates = select_contradict_candidates(
+        ids, sim_matrix, mem_by_id, mode=finder_mode)
     candidates.sort(key=lambda x: x[2], reverse=True)
     max_eval = (SURGE_MAX_CALLS // 2) if is_surge else (NORMAL_MAX_CALLS // 2)
+
+    if finder_mode == "nli" and nli.is_available():
+        # Line-level NLI scores each cosine-gated pair; only pairs the
+        # finder flags reach the LLM judge. Recall-first threshold - the
+        # judge owns precision. The pair cap bounds CPU cost on big stores.
+        scored = []
+        for mid_a, mid_b, cos in candidates[:NLI_FINDER_MAX_PAIRS]:
+            p = nli.line_max_contradiction(
+                mem_by_id[mid_a].get("content", ""),
+                mem_by_id[mid_b].get("content", ""))
+            if p is not None and p >= NLI_FINDER_THRESHOLD:
+                scored.append((mid_a, mid_b, cos, p))
+        scored.sort(key=lambda x: x[3], reverse=True)
+        log(f"  NLI finder: {len(scored)}/{min(len(candidates), NLI_FINDER_MAX_PAIRS)} "
+            f"pairs flagged at P(contra) >= {NLI_FINDER_THRESHOLD}")
+        candidates = [(a, b, c) for a, b, c, _ in scored]
+    elif finder_mode == "nli":
+        log("  NLI finder requested but transformers/torch unavailable; "
+            "using cosine candidates unscored")
+
     candidates = candidates[:max_eval]
     stats["candidates"] = len(candidates)
 

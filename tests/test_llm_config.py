@@ -50,3 +50,48 @@ def test_per_phase_url_and_model_still_resolve(monkeypatch):
     cfg = _get_config(phase="MERGE")
     assert cfg["url"] == "https://api.anthropic.com/v1/chat/completions"
     assert cfg["model"] == "claude-sonnet-5"
+
+
+class _FakeResp:
+    def read(self):
+        import json as _json
+        return _json.dumps(
+            {"choices": [{"message": {"content": "OK"}}]}).encode()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _capture_chat(monkeypatch, **chat_kwargs):
+    import json as _json
+    import urllib.request
+    from mnemos.consolidation.llm import chat
+    _clear(monkeypatch)
+    monkeypatch.setenv("MNEMOS_LLM_API_KEY", "k")
+    monkeypatch.setenv("MNEMOS_LLM_MODEL", "m")
+    captured = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured["payload"] = _json.loads(req.data.decode())
+        return _FakeResp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    out = chat([{"role": "user", "content": "x"}], **chat_kwargs)
+    return out, captured["payload"]
+
+
+def test_chat_temperature_none_omits_param(monkeypatch):
+    # Model families like Sonnet 5 reject temperature outright; callers pass
+    # None to not send it at all, no env flag needed.
+    out, payload = _capture_chat(monkeypatch, temperature=None)
+    assert out == "OK"
+    assert "temperature" not in payload
+
+
+def test_chat_explicit_temperature_still_sent(monkeypatch):
+    out, payload = _capture_chat(monkeypatch, temperature=0.0)
+    assert out == "OK"
+    assert payload["temperature"] == 0.0

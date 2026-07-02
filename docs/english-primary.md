@@ -43,7 +43,7 @@ vocabulary.
 
 Order of operations per machine:
 
-1. Update Mnemos to >= 10.15.0 and restart any MCP server processes.
+1. Update Mnemos to >= 10.15.2 and restart any MCP server processes.
 2. Back up the store: `sqlite3 "$MNEMOS_DB" ".backup '$MNEMOS_DB.bak-pre-english'"`
 3. Configure the translation LLM (standard `MNEMOS_LLM_*` env; optionally
    pin a stronger model just for this job via `MNEMOS_LLM_MODEL_TRANSLATE`).

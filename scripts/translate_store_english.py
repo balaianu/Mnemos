@@ -78,7 +78,7 @@ def translate(content):
     for attempt in (1, 2):
         result = chat(
             [{"role": "user", "content": PROMPT.format(text=content)}],
-            max_tokens=8000, temperature=0.0, phase="TRANSLATE")
+            max_tokens=8000, temperature=None, phase="TRANSLATE")
         if result is None:
             flags.append(f"llm-error-{attempt}")
             continue

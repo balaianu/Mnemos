@@ -4,6 +4,12 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.15.2] - 2026-07-02 (chat temperature=None omits the parameter)
+
+### Fixed
+- `consolidation.llm.chat()` now treats `temperature=None` as "do not send the parameter", the portable calling convention for model families that reject `temperature` outright (e.g. Sonnet 5 on the OpenAI-compat endpoint, which 400s the whole call). Previously omission was only possible deployment-wide via `MNEMOS_LLM_OMIT_TEMPERATURE[_<PHASE>]`; that env escape hatch still works and still wins when set.
+- `scripts/translate_store_english.py` passes `temperature=None`, so the translation runbook no longer requires `MNEMOS_LLM_OMIT_TEMPERATURE_TRANSLATE=1` when translating with such models. Without the fix, every translation silently fell back to the original (chat() swallows the 400 and returns None), which read as "LLM configured but nothing happens".
+
 ## [10.15.1] - 2026-07-02 (settings centralization, English-primary migration runbook)
 
 ### Changed

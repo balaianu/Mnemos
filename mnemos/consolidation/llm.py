@@ -129,7 +129,8 @@ def chat(messages, max_tokens=1024, temperature=0.3, fast=False, phase=None, tim
     Args:
         messages: list of {"role": ..., "content": ...} dicts
         max_tokens: max response tokens
-        temperature: sampling temperature
+        temperature: sampling temperature; None = do not send the parameter
+               (portable across model families that reject it)
         fast: use the fast/cheap model instead of the main model
         phase: optional phase name ("MERGE", "WEAVE", "CONTRADICT",
                "SYNTHESIZE"). When set, MNEMOS_LLM_MODEL_<PHASE> and
@@ -161,9 +162,10 @@ def chat(messages, max_tokens=1024, temperature=0.3, fast=False, phase=None, tim
         "max_tokens": max_tokens,
     }
     # Some newer models (e.g. Anthropic Sonnet 5 on the OpenAI-compat endpoint)
-    # reject `temperature` as deprecated and 400 the whole call. Omit it for such
-    # endpoints via MNEMOS_LLM_OMIT_TEMPERATURE[_<PHASE>].
-    if not cfg.get("omit_temperature"):
+    # reject `temperature` as deprecated and 400 the whole call. Callers pass
+    # temperature=None to not send the parameter at all; deployments can also
+    # force omission via MNEMOS_LLM_OMIT_TEMPERATURE[_<PHASE>].
+    if temperature is not None and not cfg.get("omit_temperature"):
         payload["temperature"] = temperature
     body = json.dumps(payload).encode("utf-8")
     headers = {

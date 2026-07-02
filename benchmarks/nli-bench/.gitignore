@@ -1,0 +1,8 @@
+# Bench DATA is derived from the private production memory DB and must never
+# land in this public repo: it contains personal memory content verbatim.
+# Only the harness scripts (*.py) and this file are committable.
+*.jsonl
+labels*.json
+translations.json
+results.json
+report.md

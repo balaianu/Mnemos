@@ -4,6 +4,22 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.17.2] - 2026-07-03 (phase 4 scans the full active set)
+
+### Fixed
+- Phase 4 received `mergeable_embeddings`, but protected memories
+  (decision-type, verified, importance >= 9) are excluded from the
+  mergeable set and are exactly the population most worth
+  contradiction-scanning; `load_embeddings` keeps them in
+  `all_embeddings` for weave/contradict by design and weave was wired
+  correctly, contradict never was. On stores whose facts are
+  predominantly protected the phase permanently reported "not enough
+  decision/fact memories" and the NLI finder never ran (production
+  Epsilon: 1 fact visible of hundreds). Phase 4 now scans
+  `all_embeddings`. Merge protection is unaffected: the phase links,
+  queues and (with the existing blast-radius guard) archives, it never
+  merges.
+
 ## [10.17.1] - 2026-07-03 (opt-out ONNX memory arena, all sessions)
 
 ### Added

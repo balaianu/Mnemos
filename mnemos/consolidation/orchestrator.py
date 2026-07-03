@@ -427,8 +427,15 @@ def run_nyx_cycle(
                 )
 
             if 4 in phases:
+                # all_embeddings, not mergeable: protected memories
+                # (decisions, verified, importance>=9) are exactly the ones
+                # worth contradiction-scanning, and load_embeddings keeps
+                # them in the full set for weave/contradict by design.
+                # They were never wired through, which is why phase 4
+                # reported "not enough decision/fact memories" on stores
+                # whose facts are predominantly protected.
                 phase_stats["phase4"] = phase_contradict(
-                    conn, mergeable_embeddings, mem_by_id, is_surge,
+                    conn, all_embeddings, mem_by_id, is_surge,
                     execute=execute, judge=judge_mode
                 )
                 if execute:

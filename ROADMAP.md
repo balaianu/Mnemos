@@ -5,50 +5,78 @@ to CHANGELOG.md when shipped.
 
 ---
 
-## v10.5 candidates
+## Near-term candidates
 
-### Parallelize Phase 0.5 (Cemelify)
+### Fix the order-dependent tier-2 test flake
 
-**Status**: identified 2026-04-18, not started.
+**Status**: identified 2026-07-02.
 
-Phase 0.5 currently iterates candidates serially: one Haiku call per
-memory, ~6-8s wall time each. On a 750-candidate Nyx run that's 75-100
-minutes for cemelify alone, blocking Phase 2A dedup behind it.
+`test_v107_tier2::test_tier2_recall_surfaces_archived` fails in a full
+suite run and passes in isolation, on trees before and after v10.15, so
+it is state leakage between tests (likely env or module-level cache),
+not a product bug. Track it down and pin it.
 
-The standalone `cml_convert_batch` helper used during the v10.4.0 data
-fix processed 457 memories in 5 min 41 s using 8 parallel workers - same
-LLM, same prompt, same content shape. Order-of-magnitude speedup.
+### Weave phase signal quality
 
-Implementation sketch:
-- Wrap the Phase 0.5 loop in `concurrent.futures.ThreadPoolExecutor` with
-  configurable `max_workers` (env: `MNEMOS_CEMELIFY_WORKERS`, default 8)
-- Preserve the in-memory `mem_by_id[mid]["content"]` update pattern so
-  downstream phases see cemelified content within the same run
-- Keep the per-100 progress log; add a per-worker concurrency note
-- Stay within rate limits: 8 workers is comfortable for OpenAI/Gradient
-  defaults; users on tighter limits can dial down via env
+**Status**: identified 2026-06-30 during the consolidation bench.
 
-Risk: thread safety of the SQLite write path inside `store.update_memory`
-needs verification - SQLite handles concurrent writes via WAL but the
-SQLAlchemy-style connection pool in `SQLiteStore` may not. Worst case:
-parallelize the LLM calls only, batch the writes serially after.
+Phase 3 (Weave) scores ~50% against gold link classifications for every
+model tested, strong and weak alike; models rarely MISS links but
+over-link and mislabel link types. The phase is net-positive but
+low-signal. Candidates: tighten `WEAVE_MIN_SIMILARITY`, reduce
+`WEAVE_TOP_K`, or fold link-type classification into the NLI layer
+(entailment direction distinguishes supports/refines better than a
+generative label).
 
----
+### Postgres backend
 
-## Other candidates (lower priority)
+**Status**: stub exists (`PostgresStore`), not implemented.
 
-- **Per-phase fast/slow budget split.** `MNEMOS_LLM_BUDGET` env to cap
-  total Haiku/gpt-4o-mini spend per cycle, fail loud at limit instead of
-  silently hammering the API.
-- **Phase 0.5 sample preview** in dry-run mode: show diff of 5 random
-  candidates' cemelified output before applying, so users can eyeball
-  quality without committing.
-- **Cemelify-on-import in batch.** Currently `MNEMOS_CEMELIFY_ON_IMPORT`
-  is per-memory; `mnemos ingest` could batch-cemelify chunks in parallel
-  for the same speedup story as Phase 0.5.
-- **PyPI publication.** README still installs via `git clone`. Once API
-  surface stabilizes, ship to pypi.org for `pip install mnemos`.
+Postgres + pgvector with the same single-transaction guarantee as
+SQLite. Adds ACID multi-tenancy and MVCC. Contributions welcome.
+
+### PyPI publication
+
+README still installs via `git clone`. The API surface has been stable
+across v10.14-10.16; publish to pypi.org for `pip install mnemos` once
+the NLI layer has a few weeks of production soak.
 
 ---
 
-Last updated: 2026-04-18
+## Explicitly rejected (do not resurrect without new evidence)
+
+- **int8 quantization of the NLI models.** Validated 2026-07-03 against
+  the 114-pair nli-bench and rejected: dynamic int8 collapses DeBERTa-v3
+  scoring to chance (contradiction AUC 0.94 -> 0.51 English, 0.84 -> 0.48
+  multilingual) and was not reliably faster on CPU. fp32 ONNX is
+  score-identical to torch and ships instead. If someone wants the speed,
+  the research path is QDQ/per-channel static quantization WITH the
+  parity gate re-run; anything that flips threshold decisions on the
+  bench pairs is dead on arrival.
+- **Jina v3 reranker.** Decided against; v2 is canonical for search
+  ranking. The store-decision roles the reranker used to hold moved to
+  the NLI layer in v10.15.
+
+---
+
+## Older candidates (lower priority, still plausible)
+
+- **Parallelize Phase 0.5 (Cemelify).** Identified 2026-04-18. Serial
+  Haiku calls make large cemelify runs slow (75-100 min at 750
+  candidates); a ThreadPoolExecutor with `MNEMOS_CEMELIFY_WORKERS` would
+  give an order-of-magnitude speedup (the standalone batch helper did
+  457 memories in under 6 min at 8 workers). Priority dropped: the
+  reference deployment runs cemelify OFF by policy (document-shaped
+  content must not be machine-rewritten) and cloud Haiku made the runs
+  it does do fast enough. Verify SQLite write-path thread safety before
+  attempting; worst case parallelize the LLM calls and serialize writes.
+- **Per-cycle LLM spend cap.** `NORMAL_MAX_CALLS` / `SURGE_MAX_CALLS`
+  became env-tunable in v10.15.1, which covers call-count budgeting; a
+  money-denominated cap (fail loud at N dollars) is still open.
+- **Phase 0.5 sample preview** in dry-run mode: show diffs of a few
+  random candidates' cemelified output before applying.
+- **Cemelify-on-import in batch** for `mnemos ingest`.
+
+---
+
+Last updated: 2026-07-03

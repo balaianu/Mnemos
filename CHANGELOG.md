@@ -4,6 +4,20 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.17.3] - 2026-07-03 (phase 4 remembers its verdicts)
+
+### Fixed
+- Phase 4 had no memory of past scans: COMPATIBLE verdicts left no trace,
+  so the same pair re-entered the finder and judge every cycle (an
+  eternal loop for every finder false positive once the queue tier
+  ships), and already-linked pairs were re-scored and re-judged with the
+  duplicate link hidden by INSERT OR IGNORE. COMPATIBLE now writes a
+  `contradiction-cleared` tombstone link, and candidate selection skips
+  pairs carrying any contradicts / superseded_by / evolves /
+  contradiction-cleared / contradiction-candidate link before scoring.
+  Clearance is permanent for the pair as stored; a later content update
+  does not re-open it (known ceiling).
+
 ## [10.17.2] - 2026-07-03 (phase 4 scans the full active set)
 
 ### Fixed

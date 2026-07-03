@@ -1042,6 +1042,32 @@ def phase_contradict(conn, mergeable_embeddings, mem_by_id, is_surge,
         "MNEMOS_NYX_CONTRADICT_FINDER", NYX_CONTRADICT_FINDER_DEFAULT).lower()
     candidates = select_contradict_candidates(
         ids, sim_matrix, mem_by_id, mode=finder_mode)
+
+    # Scan memory (v10.17.3): pairs already judged or already linked are
+    # excluded before any scoring. Without this every COMPATIBLE verdict
+    # was forgotten and the same pair re-entered the finder/judge loop
+    # every cycle. Clearance is permanent for the pair as stored; a later
+    # content update does not re-open it (known ceiling, acceptable while
+    # updates re-embed rarely).
+    handled = set()
+    try:
+        rows = conn.execute(
+            "SELECT source_id, target_id FROM memory_links "
+            "WHERE relation_type IN ('contradicts', 'superseded_by', "
+            "'evolves', 'contradiction-cleared', 'contradiction-candidate')"
+        ).fetchall()
+        for s, t in rows:
+            handled.add((s, t))
+            handled.add((t, s))
+    except Exception:
+        pass
+    if handled:
+        before = len(candidates)
+        candidates = [(a, b, c) for a, b, c in candidates
+                      if (a, b) not in handled]
+        if before != len(candidates):
+            log(f"  Scan memory: skipped {before - len(candidates)} "
+                "already-judged/linked pairs")
     candidates.sort(key=lambda x: x[2], reverse=True)
     max_eval = (SURGE_MAX_CALLS // 2) if is_surge else (NORMAL_MAX_CALLS // 2)
 
@@ -1234,7 +1260,16 @@ def phase_contradict(conn, mergeable_embeddings, mem_by_id, is_surge,
 
         else:
             stats["compatible"] += 1
-            print(f"    → Compatible", flush=True)
+            # Tombstone so the pair never re-enters the finder/judge loop
+            # (see the scan-memory filter in candidate selection).
+            conn.execute(
+                "INSERT OR IGNORE INTO memory_links "
+                "(source_id, target_id, relation_type, strength) "
+                "VALUES (?, ?, 'contradiction-cleared', 0.1)",
+                (older_id, newer_id),
+            )
+            conn.commit()
+            print(f"    → Compatible (cleared)", flush=True)
 
         time.sleep(0.5)
 

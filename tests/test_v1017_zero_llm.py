@@ -193,6 +193,34 @@ class TestJudgeQueue:
             "WHERE relation_type='contradiction-candidate'").fetchone()
         assert row is not None
 
+    def test_compatible_verdict_is_remembered(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("MNEMOS_NYX_CONTRADICT_FINDER", raising=False)
+        store, conn, mem_by_id, embeddings = _phase4_fixture(tmp_path)
+        monkeypatch.setattr(
+            phases, "opus_chat",
+            lambda *a, **k: "CLASSIFICATION: COMPATIBLE\nEXPLANATION: fine")
+        first = phase_contradict(conn, embeddings, mem_by_id,
+                                 is_surge=False, execute=True, judge="llm")
+        assert first["compatible"] == 1
+        cleared = conn.execute(
+            "SELECT COUNT(*) FROM memory_links "
+            "WHERE relation_type='contradiction-cleared'").fetchone()[0]
+        assert cleared == 1
+        second = phase_contradict(conn, embeddings, mem_by_id,
+                                  is_surge=False, execute=True, judge="llm")
+        assert second["candidates"] == 0
+
+    def test_queue_mode_skips_cleared_pairs(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("MNEMOS_NYX_CONTRADICT_FINDER", raising=False)
+        store, conn, mem_by_id, embeddings = _phase4_fixture(tmp_path)
+        conn.execute(
+            "INSERT INTO memory_links (source_id, target_id, relation_type, "
+            "strength) VALUES (1, 2, 'contradiction-cleared', 0.1)")
+        conn.commit()
+        stats = phase_contradict(conn, embeddings, mem_by_id,
+                                 is_surge=False, execute=True, judge="queue")
+        assert stats["queued"] == 0
+
     def test_llm_mode_consumes_queued_candidates(self, tmp_path, monkeypatch):
         monkeypatch.delenv("MNEMOS_NYX_CONTRADICT_FINDER", raising=False)
         store, conn, mem_by_id, embeddings = _phase4_fixture(tmp_path)

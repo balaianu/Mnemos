@@ -158,65 +158,6 @@ class TestOpenAIDefaultModel:
         assert cfg["model"] == "gpt-4o"
 
 
-# --- Phase 0.5 skips consolidation_lock memories (v10.4.0) ---
-
-class TestPhase05SkipsLocked:
-    def _build_mem_by_id(self, conn, mid):
-        row = conn.execute(
-            "SELECT id, content, consolidation_lock FROM memories WHERE id=?",
-            (mid,),
-        ).fetchone()
-        return {
-            row["id"]: {
-                "id": row["id"],
-                "content": row["content"],
-                "consolidation_lock": row["consolidation_lock"],
-            }
-        }
-
-    def test_consolidation_lock_memory_is_not_cemelified(self, m):
-        long_prose = "This is prose. " * 100  # ~1500 chars, no CML prefix
-        locked_id = m.store_memory(
-            skip_dedup=True,
-            project="p",
-            content=long_prose,
-            consolidation_lock=True,
-        )["id"]
-
-        from mnemos.consolidation.orchestrator import _phase_cemelify
-        conn = m.store._get_conn()
-        import sqlite3
-        conn.row_factory = sqlite3.Row
-        mem_by_id = self._build_mem_by_id(conn, locked_id)
-
-        called_with = []
-        def spy(content, max_tokens=512):
-            called_with.append(content)
-            return "F: this should not happen"
-        with patch("mnemos.cemelify.cemelify", side_effect=spy):
-            stats = _phase_cemelify(conn, m.store, mem_by_id, execute=True)
-
-        assert stats["candidates"] == 0
-        assert called_with == []
-
-    def test_unlocked_long_prose_is_cemelified(self, m):
-        long_prose = "This is prose. " * 100
-        unlocked_id = m.store_memory(
-            skip_dedup=True, project="p", content=long_prose,
-        )["id"]
-
-        from mnemos.consolidation.orchestrator import _phase_cemelify
-        conn = m.store._get_conn()
-        import sqlite3
-        conn.row_factory = sqlite3.Row
-        mem_by_id = self._build_mem_by_id(conn, unlocked_id)
-
-        with patch("mnemos.cemelify.cemelify", return_value="F: cemelified prose"):
-            stats = _phase_cemelify(conn, m.store, mem_by_id, execute=True)
-
-        assert stats["candidates"] == 1
-        assert stats["cemelified"] == 1
-        updated = conn.execute(
-            "SELECT content FROM memories WHERE id=?", (unlocked_id,),
-        ).fetchone()
-        assert updated["content"] == "F: cemelified prose"
+# --- Phase 0.5 (Cemelify) was removed from the Nyx cycle in v10.20.0;
+# its skip-locked tests went with it. cemelify() itself lives on for
+# ingest-time shaping and keeps its tests above.

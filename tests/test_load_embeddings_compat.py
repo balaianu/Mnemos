@@ -39,7 +39,7 @@ def test_load_embeddings_on_rowid_schema(m):
     assert stored >= 1
     # Regression: this raised 'no such column: id' on the rowid schema before the
     # fix. It must run and return exactly one real 1024-dim embedding per stored memory.
-    embeddings, mergeable, mem_by_id = load_embeddings(conn)
+    embeddings, mergeable, mem_by_id = load_embeddings(conn, namespace="t")
     assert len(embeddings) == stored
     assert len(mem_by_id) == stored
     for vec in embeddings.values():

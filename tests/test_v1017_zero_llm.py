@@ -380,6 +380,37 @@ class TestMemArenaOptOut:
         assert "enable_cpu_mem_arena" in OnnxModel.EXPOSED_SESSION_OPTIONS
 
 
+class TestNamespaceScopedNyx:
+    """v10.20.0: Nyx loaders must never read across namespaces."""
+
+    def test_load_embeddings_sees_only_own_namespace(self, tmp_path,
+                                                     monkeypatch):
+        from mnemos.consolidation.phases import load_embeddings
+        store = _store(tmp_path)
+        conn = store._get_conn()
+        for mid, ns in ((1, "t"), (2, "t"), (3, "other")):
+            conn.execute(
+                "INSERT INTO memories (id, namespace, project, content, "
+                "type, layer, status) VALUES (?, ?, 'dev', 'F: mem', "
+                "'fact', 'semantic', 'active')", (mid, ns))
+        conn.commit()
+        _, _, mem_by_id = load_embeddings(conn, namespace="t")
+        assert set(mem_by_id) == {1, 2}
+
+    def test_load_memory_meta_sees_only_own_namespace(self, tmp_path):
+        from mnemos.consolidation.phases import load_memory_meta
+        store = _store(tmp_path)
+        conn = store._get_conn()
+        for mid, ns in ((1, "t"), (2, "other")):
+            conn.execute(
+                "INSERT INTO memories (id, namespace, project, content, "
+                "type, layer, status) VALUES (?, ?, 'dev', 'F: mem', "
+                "'fact', 'semantic', 'active')", (mid, ns))
+        conn.commit()
+        meta = load_memory_meta(conn, namespace="t")
+        assert set(meta) == {1}
+
+
 class TestUsefulLoop:
     def test_get_marks_recent_retrievals_useful(self, tmp_path):
         store = _store(tmp_path)

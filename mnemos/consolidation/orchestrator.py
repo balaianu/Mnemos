@@ -1,9 +1,11 @@
 """
 Nyx cycle orchestrator for Mnemos.
 
-Runs the 6-phase consolidation pipeline. Phase 6 (Bookkeeping) always runs
-since it's pure SQL. Phases 1-4 require an LLM and are skipped automatically
-if no LLM is configured (see mnemos.consolidation.llm).
+Runs the Nyx consolidation pipeline. Phases 1 (triage), 2 (dedup with the
+mechanical engine), 4 (contradiction finder in queue mode) and 6
+(bookkeeping) run with zero LLM calls; phases 3 (weave) and 5 (synthesize),
+plus the phase-4 llm judge, form the optional LLM tier and are skipped with
+a warning when no LLM is configured (see mnemos.consolidation.llm).
 
 Usage:
     from mnemos.consolidation import run_nyx_cycle
@@ -251,69 +253,6 @@ def cleanup_stale_links(conn, execute: bool = True):
         return 0
 
 
-# --- Phase 0.5: Cemelify (v10.4.0, requires LLM) ---
-
-def _phase_cemelify(conn, store, mem_by_id, execute: bool = False):
-    """Rewrite non-CML or over-long active memories into CML form via LLM.
-
-    Candidates: content does not start with a CML prefix (F:/D:/C:/L:/P:/W:/R:),
-    OR content length > 800 chars. Skips memories with consolidation_lock=1
-    (prose-protection convention, matches Phase 2 Dedup semantics).
-
-    Each candidate is passed through cemelify(), which falls back to the
-    original on LLM failure. We detect "no change" and skip the write to
-    avoid spurious updated_at churn. Updates persist via store.update_memory;
-    re-embed happens on the next bookkeeping pass (deferred by design to keep
-    this phase cheap).
-
-    Returns a stats dict: candidates / cemelified / unchanged / failed.
-    """
-    from ..cemelify import cemelify, _needs_cemelify
-
-    candidates = []
-    for mid, m in mem_by_id.items():
-        if m.get("consolidation_lock"):
-            continue
-        if _needs_cemelify(m.get("content")):
-            candidates.append(mid)
-
-    log(f"Phase 0.5 (Cemelify): {len(candidates)} candidates")
-    if not candidates:
-        return {"candidates": 0, "cemelified": 0, "unchanged": 0, "failed": 0}
-
-    cemelified = unchanged = failed = 0
-    for i, mid in enumerate(candidates):
-        if i and i % 100 == 0:
-            log(f"  Phase 0.5 progress: {i}/{len(candidates)}")
-        original = mem_by_id[mid].get("content") or ""
-        try:
-            new_content = cemelify(original)
-        except Exception:
-            failed += 1
-            continue
-        if not new_content or new_content == original:
-            unchanged += 1
-            continue
-        if execute:
-            try:
-                store.update_memory(mid, {"content": new_content})
-                cemelified += 1
-                # Reflect change so downstream phases (Dedup, Weave) in this
-                # same run operate on the cemelified content.
-                mem_by_id[mid]["content"] = new_content
-            except Exception:
-                failed += 1
-        else:
-            cemelified += 1  # dry-run accounting
-
-    log(f"Phase 0.5 (Cemelify) complete: cemelified={cemelified}, "
-        f"unchanged={unchanged}, failed={failed}")
-    return {
-        "candidates": len(candidates),
-        "cemelified": cemelified,
-        "unchanged": unchanged,
-        "failed": failed,
-    }
 
 
 # --- Main orchestrator ---
@@ -413,7 +352,8 @@ def run_nyx_cycle(
     # outside the LLM block so SQL-only runs still triage, not just Phase 6.
     if 1 in phases:
         from .phases import load_memory_meta, phase_triage
-        meta = load_memory_meta(conn, project=project)
+        meta = load_memory_meta(conn, project=project,
+                                namespace=getattr(store, 'namespace', None))
         new_ids, surge_detected = phase_triage(conn, meta, last_run)
         is_surge = is_surge or surge_detected
         phase_stats["phase1"] = {"new_memories": len(new_ids), "surge": is_surge}
@@ -428,26 +368,22 @@ def run_nyx_cycle(
 
         log("Loading embeddings...")
         all_embeddings, mergeable_embeddings, mem_by_id = load_embeddings(
-            conn, project=project
+            conn, project=project,
+            namespace=getattr(store, 'namespace', None)
         )
 
         if len(all_embeddings) < 2:
             log(f"Only {len(all_embeddings)} embeddings, need >=2 for clustering. Skipping phases 2-5.")
         else:
 
-            # Phase 0.5: Cemelify (v10.4.0). Rewrites prose-form active
-            # memories into CML before clustering, so Dedup operates on
-            # canonical content. Skips consolidation_lock=1 memories.
-            # Opt-out: MNEMOS_NYX_CEMELIFY=0 skips it. Rewriting already-stored
-            # memories every cycle can drift facts on weaker local models, and the
-            # non-CML population is often document-shaped content best left intact.
-            # LLM-tier work: silently absent on keyless runs.
-            if os.environ.get("MNEMOS_NYX_CEMELIFY", "1") != "0" and has_llm:
-                phase_stats["phase0_5"] = _phase_cemelify(
-                    conn, store, mem_by_id, execute=execute
-                )
-            else:
-                log("Phase 0.5 (Cemelify): skipped (MNEMOS_NYX_CEMELIFY=0)")
+            # Phase 0.5 (Cemelify) was REMOVED in v10.20.0. Rewriting
+            # already-stored memories every cycle is generation against
+            # content whose fidelity is the product; it drifted exact
+            # strings on weaker models, was disabled on every known
+            # deployment, and (final straw) ran ungated by the phase list,
+            # firing LLM calls on zero-LLM runs of key-configured hosts.
+            # Prose entering the store is shaped at store/ingest time
+            # instead; stored content is never rewritten in place.
 
             if 2 in phases:
                 phase_stats["phase2"] = phase_dedup(
@@ -458,7 +394,8 @@ def run_nyx_cycle(
                     if (p1.get("tight_merged", 0) + p1.get("topic_merged", 0)) > 0:
                         log("Reloading embeddings after merges...")
                         all_embeddings, mergeable_embeddings, mem_by_id = load_embeddings(
-                            conn, project=project
+                            conn, project=project,
+                            namespace=getattr(store, 'namespace', None)
                         )
 
             if 3 in phases:
@@ -487,7 +424,8 @@ def run_nyx_cycle(
                         # a just-archived source.
                         log("Reloading embeddings after supersedes...")
                         all_embeddings, mergeable_embeddings, mem_by_id = load_embeddings(
-                            conn, project=project
+                            conn, project=project,
+                            namespace=getattr(store, 'namespace', None)
                         )
 
             if 5 in phases:

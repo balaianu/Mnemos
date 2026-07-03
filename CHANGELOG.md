@@ -4,6 +4,29 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.20.0] - 2026-07-03 (phase 0.5 removed; Nyx is namespace-scoped)
+
+### Removed
+- Phase 0.5 (Cemelify) no longer exists in the Nyx cycle. Rewriting
+  already-stored memories every night is generation against content
+  whose fidelity is the product: it drifted exact strings on weaker
+  models, was disabled on every known deployment, and ran ungated by
+  the phase list, so a zero-LLM `--phases 1,2,4,6` run on a
+  key-configured host still fired LLM calls (observed in the field:
+  28x 401 against a stale key). `MNEMOS_NYX_CEMELIFY` is gone;
+  `cemelify()` itself remains for ingest-time shaping of NEW content.
+  Stored content is never rewritten in place.
+
+### Fixed
+- Nyx loaders are namespace-scoped: `load_embeddings` and
+  `load_memory_meta` read only the active namespace (default: the same
+  resolution as every write path; both accept an explicit `namespace=`).
+  Since v10.6.0 the write side was namespace-correct but reads saw every
+  namespace in the DB file, so on a multi-tenant deployment phase 2
+  could cluster tenant A's memories with tenant B's, merge them into
+  the current namespace and archive both originals. Found in the field
+  on a second deployment; single-namespace stores were never affected.
+
 ## [10.19.1] - 2026-07-03 (second test-fixture DB leak closed)
 
 ### Fixed

@@ -132,10 +132,19 @@ def log(msg):
 # Shared helpers
 # =============================================================================
 
-def load_embeddings(conn, project=None):
-    """Load active memory embeddings. Returns (all_embeddings, mergeable_embeddings, mem_by_id)."""
-    where = "status = 'active'"
-    params = []
+def load_embeddings(conn, project=None, namespace=None):
+    """Load active memory embeddings. Returns (all_embeddings, mergeable_embeddings, mem_by_id).
+
+    Namespace-scoped (v10.20.0): the write side has been namespace-correct
+    since v10.6.0, but reads saw every namespace in the DB file, so on a
+    multi-tenant deployment Nyx could cluster tenant A's memories with
+    tenant B's and archive both under the current namespace. Defaults to
+    the active namespace, same resolution as every write path.
+    """
+    if namespace is None:
+        namespace = _active_namespace()
+    where = "status = 'active' AND namespace = ?"
+    params = [namespace]
     if project:
         where += " AND project = ?"
         params.append(project)
@@ -593,14 +602,17 @@ def phase_triage(conn, mem_by_id, last_run_at):
     return new_ids, is_surge
 
 
-def load_memory_meta(conn, project=None):
+def load_memory_meta(conn, project=None, namespace=None):
     """Lightweight metadata for Phase 1 triage: id, status and created_at of
-    active memories, with no embeddings loaded. Mirrors load_embeddings' active
-    (+ optional project) filter so triage sees the same memory set whether or
-    not the LLM phases run, which lets Phase 1 run standalone in SQL-only mode.
+    active memories, with no embeddings loaded. Mirrors load_embeddings'
+    active + namespace (+ optional project) filter so triage sees the same
+    memory set whether or not the LLM phases run, which lets Phase 1 run
+    standalone in SQL-only mode.
     """
-    where = "status = 'active'"
-    params = []
+    if namespace is None:
+        namespace = _active_namespace()
+    where = "status = 'active' AND namespace = ?"
+    params = [namespace]
     if project:
         where += " AND project = ?"
         params.append(project)

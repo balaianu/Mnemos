@@ -12,10 +12,18 @@ strongest benched); everything else goes to a multilingual XNLI checkpoint
 (~100 languages). Routing uses a cheap English-stopword heuristic; text with
 no prose signal at all (paths, versions, numbers) defaults to English.
 
-Optional dependency: transformers + torch (install extra: mnemos[nli]).
-Every entry point degrades gracefully (returns None) when unavailable.
+Backends, in preference order (v10.16.0):
+  1. ONNX int8 (onnxruntime, already in the dependency tree via fastembed;
+     tokenizer via transformers, no torch). Models are local exports under
+     MNEMOS_NLI_ONNX_DIR (default ~/.cache/mnemos/nli-onnx/{en,multi});
+     produce them once with scripts/export_nli_onnx.py.
+  2. torch + transformers fallback (install extra: mnemos[nli-torch]),
+     loading the HF checkpoints directly.
+Every entry point degrades gracefully (returns None) when neither backend
+is usable.
 """
 
+import os
 import re
 import threading
 
@@ -34,14 +42,38 @@ _scorers = {}
 _scorer_lock = threading.Lock()
 
 
-def is_available() -> bool:
-    """True when the optional NLI runtime (transformers + torch) importable."""
+def _torch_available() -> bool:
     try:
         import torch  # noqa: F401
         import transformers  # noqa: F401
         return True
     except Exception:
         return False
+
+
+def _onnx_model_dir(multilingual=False):
+    """Directory containing an exported model.onnx for the routed model,
+    or None. Layout: <MNEMOS_NLI_ONNX_DIR>/{en,multi}/model.onnx."""
+    base = os.environ.get(
+        "MNEMOS_NLI_ONNX_DIR",
+        os.path.expanduser("~/.cache/mnemos/nli-onnx"))
+    d = os.path.join(base, "multi" if multilingual else "en")
+    return d if os.path.exists(os.path.join(d, "model.onnx")) else None
+
+
+def _onnx_available() -> bool:
+    try:
+        import onnxruntime  # noqa: F401
+        import transformers  # noqa: F401
+    except Exception:
+        return False
+    return (_onnx_model_dir(multilingual=False) is not None
+            or _onnx_model_dir(multilingual=True) is not None)
+
+
+def is_available() -> bool:
+    """True when at least one NLI backend (ONNX export or torch) is usable."""
+    return _onnx_available() or _torch_available()
 
 
 def is_english(text: str) -> bool:
@@ -90,12 +122,59 @@ class _TorchNliScorer:
         return float(probs[self.idx["entail"]]), float(probs[self.idx["contra"]])
 
 
+class _OnnxNliScorer:
+    """onnxruntime-backed scorer over a local export (no torch needed)."""
+
+    def __init__(self, onnx_dir):
+        import numpy as np
+        import onnxruntime as ort
+        from transformers import AutoTokenizer, AutoConfig
+        self._np = np
+        self.tokenizer = AutoTokenizer.from_pretrained(onnx_dir)
+        cfg = AutoConfig.from_pretrained(onnx_dir)
+        self.idx = {}
+        for i, label in cfg.id2label.items():
+            label = label.lower()
+            if "entail" in label:
+                self.idx["entail"] = int(i)
+            elif "contra" in label:
+                self.idx["contra"] = int(i)
+        self.session = ort.InferenceSession(
+            os.path.join(onnx_dir, "model.onnx"),
+            providers=["CPUExecutionProvider"])
+        self._input_names = {i.name for i in self.session.get_inputs()}
+
+    def score(self, premise, hypothesis):
+        np = self._np
+        enc = self.tokenizer(premise, hypothesis, return_tensors="np",
+                             truncation=True, max_length=NLI_MAX_LENGTH)
+        feed = {k: v for k, v in enc.items() if k in self._input_names}
+        logits = self.session.run(None, feed)[0][0].astype(np.float64)
+        e = np.exp(logits - logits.max())
+        probs = e / e.sum()
+        return float(probs[self.idx["entail"]]), float(probs[self.idx["contra"]])
+
+
 def _get_scorer(multilingual=False):
+    """ONNX-first scorer resolution. MNEMOS_NLI_BACKEND pins a backend:
+    auto (default) prefers a local ONNX export and falls back to torch;
+    onnx and torch use only that backend (raising when unusable, which the
+    public score functions turn into a graceful None)."""
     key = "multi" if multilingual else "en"
+    backend = os.environ.get("MNEMOS_NLI_BACKEND", "auto").lower()
     with _scorer_lock:
         if key not in _scorers:
-            model_id = NLI_MULTI_MODEL if multilingual else NLI_EN_MODEL
-            _scorers[key] = _TorchNliScorer(model_id)
+            onnx_dir = (None if backend == "torch"
+                        else _onnx_model_dir(multilingual=multilingual))
+            if onnx_dir is not None:
+                _scorers[key] = _OnnxNliScorer(onnx_dir)
+            elif backend == "onnx":
+                raise RuntimeError(
+                    "MNEMOS_NLI_BACKEND=onnx but no exported model found "
+                    "(run scripts/export_nli_onnx.py)")
+            else:
+                model_id = NLI_MULTI_MODEL if multilingual else NLI_EN_MODEL
+                _scorers[key] = _TorchNliScorer(model_id)
         return _scorers[key]
 
 
@@ -107,25 +186,31 @@ def _score_pair(a, b):
 
 
 def p_contradiction(a, b):
-    """Max-direction P(contradiction). None when the runtime is unavailable.
+    """Max-direction P(contradiction). None when no backend is usable.
 
     Max over both directions is mandatory: real contradictions can score
     asymmetrically (benched 0.44 one direction, 0.99 the other).
     """
     if not is_available():
         return None
-    (_, c1), (_, c2) = _score_pair(a, b)
+    try:
+        (_, c1), (_, c2) = _score_pair(a, b)
+    except Exception:
+        return None
     return max(c1, c2)
 
 
 def bidirectional_entailment(a, b):
     """Min-direction P(entailment): duplicate = each side entails the other.
 
-    None when the runtime is unavailable.
+    None when no backend is usable.
     """
     if not is_available():
         return None
-    (e1, _), (e2, _) = _score_pair(a, b)
+    try:
+        (e1, _), (e2, _) = _score_pair(a, b)
+    except Exception:
+        return None
     return min(e1, e2)
 
 
@@ -161,10 +246,13 @@ def line_max_contradiction(a, b, top_k=8):
         scored.sort(key=lambda t: t[0], reverse=True)
         pairs = [(la, lb) for _, la, lb in scored[:top_k]]
     best = 0.0
-    for la, lb in pairs:
-        multilingual = not (is_english(la) and is_english(lb))
-        scorer = _get_scorer(multilingual=multilingual)
-        _, c1 = scorer.score(la, lb)
-        _, c2 = scorer.score(lb, la)
-        best = max(best, c1, c2)
+    try:
+        for la, lb in pairs:
+            multilingual = not (is_english(la) and is_english(lb))
+            scorer = _get_scorer(multilingual=multilingual)
+            _, c1 = scorer.score(la, lb)
+            _, c2 = scorer.score(lb, la)
+            best = max(best, c1, c2)
+    except Exception:
+        return None
     return best

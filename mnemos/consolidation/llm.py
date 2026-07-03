@@ -120,6 +120,12 @@ def _log(msg):
     print(f"[{ts}] {msg}", flush=True)
 
 
+# Endpoints that rejected the temperature parameter, keyed (url, model).
+# Populated at runtime from observed 400s; consulted before every payload
+# build so one rejection per process is the maximum.
+_TEMP_REJECTED = set()
+
+
 def chat(messages, max_tokens=1024, temperature=0.3, fast=False, phase=None, timeout=None):
     """Call an OpenAI-compatible chat completions endpoint.
 
@@ -163,9 +169,13 @@ def chat(messages, max_tokens=1024, temperature=0.3, fast=False, phase=None, tim
     }
     # Some newer models (e.g. Anthropic Sonnet 5 on the OpenAI-compat endpoint)
     # reject `temperature` as deprecated and 400 the whole call. Callers pass
-    # temperature=None to not send the parameter at all; deployments can also
-    # force omission via MNEMOS_LLM_OMIT_TEMPERATURE[_<PHASE>].
-    if temperature is not None and not cfg.get("omit_temperature"):
+    # temperature=None to not send the parameter; deployments can force
+    # omission via MNEMOS_LLM_OMIT_TEMPERATURE[_<PHASE>]; and a rejection
+    # observed at runtime is remembered per (url, model) so every later call
+    # self-heals (see the HTTPError handler below).
+    omit_temp = (cfg.get("omit_temperature")
+                 or (cfg["url"], model) in _TEMP_REJECTED)
+    if temperature is not None and not omit_temp:
         payload["temperature"] = temperature
     body = json.dumps(payload).encode("utf-8")
     headers = {
@@ -189,6 +199,18 @@ def chat(messages, max_tokens=1024, temperature=0.3, fast=False, phase=None, tim
                     content = msg.get("content") or ""
                     return content.strip() if content else None
         except urllib.error.HTTPError as e:
+            if e.code == 400 and "temperature" in payload:
+                try:
+                    err_body = e.read().decode("utf-8", "replace")
+                except Exception:
+                    err_body = ""
+                if "temperature" in err_body:
+                    _TEMP_REJECTED.add((cfg["url"], model))
+                    payload.pop("temperature")
+                    body = json.dumps(payload).encode("utf-8")
+                    _log(f"model {model} rejects temperature; "
+                         "retrying without it (remembered)")
+                    continue
             if attempt < 2 and e.code in (429, 500, 502, 503, 504):
                 time.sleep(2 ** attempt)
                 continue

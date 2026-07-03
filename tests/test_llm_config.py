@@ -95,3 +95,38 @@ def test_chat_explicit_temperature_still_sent(monkeypatch):
     out, payload = _capture_chat(monkeypatch, temperature=0.0)
     assert out == "OK"
     assert payload["temperature"] == 0.0
+
+
+def test_chat_auto_retries_without_temperature_on_400(monkeypatch):
+    import io
+    import json as _json
+    import urllib.error
+    import urllib.request
+    import mnemos.consolidation.llm as llm_mod
+    from mnemos.consolidation.llm import chat
+    _clear(monkeypatch)
+    monkeypatch.setenv("MNEMOS_LLM_API_KEY", "k")
+    monkeypatch.setenv("MNEMOS_LLM_MODEL", "m")
+    monkeypatch.setattr(llm_mod, "_TEMP_REJECTED", set())
+    payloads = []
+
+    def fake_urlopen(req, timeout=None):
+        payloads.append(_json.loads(req.data.decode()))
+        if "temperature" in payloads[-1]:
+            raise urllib.error.HTTPError(
+                "http://x", 400, "Bad Request", {},
+                io.BytesIO(b'{"error":{"message":"temperature is deprecated'
+                           b' for this model"}}'))
+        return _FakeResp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    out = chat([{"role": "user", "content": "x"}], temperature=0.3)
+    assert out == "OK"
+    assert "temperature" in payloads[0]
+    assert "temperature" not in payloads[-1]
+
+    # rejection is remembered: the next call never sends temperature
+    payloads.clear()
+    out = chat([{"role": "user", "content": "y"}], temperature=0.3)
+    assert out == "OK"
+    assert len(payloads) == 1 and "temperature" not in payloads[0]

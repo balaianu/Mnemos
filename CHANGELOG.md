@@ -4,6 +4,13 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.16.0] - 2026-07-03 (ONNX backend for the NLI layer; self-healing temperature rejection)
+
+### Added
+- ONNX backend for the NLI decision layer, preferred over torch when a local export exists. Runtime is onnxruntime (already in the dependency tree via FastEmbed) plus the transformers tokenizer, no torch: the `mnemos[nli]` extra shrinks from a multi-GB torch pull to `onnxruntime + transformers + sentencepiece`. Models are exported once with `scripts/export_nli_onnx.py` (tooling extra: `mnemos[nli-export]`) into `MNEMOS_NLI_ONNX_DIR` (default `~/.cache/mnemos/nli-onnx/{en,multi}`), or copied between machines. `MNEMOS_NLI_BACKEND` pins `auto`/`onnx`/`torch`.
+- Parity gate results (114 nli-bench pairs, both models): ONNX fp32 is score-identical to torch, max probability drift 1e-05, identical AUC to 4 decimals, zero threshold flips. int8 dynamic quantization was REJECTED by the same gate: it collapses DeBERTa-v3 to chance (contradiction AUC 0.94 -> 0.51 English, 0.84 -> 0.48 multilingual) and was not even reliably faster on CPU. The layer ships fp32-only; the torch scorer remains as fallback (`mnemos[nli-torch]`).
+- `chat()` self-heals on temperature-rejecting models: a 400 naming `temperature` strips the parameter, retries immediately, and remembers the (endpoint, model) pair for the process lifetime. Nyx phases with hardcoded temperatures now work against such models with no configuration; `MNEMOS_LLM_OMIT_TEMPERATURE[_<PHASE>]` remains as an explicit override that skips even the first probe.
+
 ## [10.15.2] - 2026-07-02 (chat temperature=None omits the parameter)
 
 ### Fixed

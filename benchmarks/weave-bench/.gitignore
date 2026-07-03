@@ -1,0 +1,8 @@
+# Bench DATA is derived from the private production memory DB and must never
+# land in this public repo: it contains personal memory content verbatim.
+# Only the harness scripts (*.py) and this file are committable.
+*.jsonl
+*results*.json
+gate_replay_results.json
+*report*.md
+*.log

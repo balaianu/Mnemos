@@ -117,22 +117,24 @@ If NOT genuinely connected, respond exactly: NO_LINK"""
 
 # --- Phase 3: Contradiction Scan ---
 
-CONTRADICT_SYSTEM = """You compare two memories on the same topic from different times to detect evolution, contradiction, or supersession.
+CONTRADICT_SYSTEM = """You compare two memories from the same project and classify their relationship. They may or may not be about the same subject; decide that first.
 
-These memories are from the SAME category and are about similar topics. Classify their relationship:
+First decide whether the two memories are about the SAME specific subject, system, or entity. If they are about DIFFERENT subjects (for example one about a web server and the other about an unrelated network device), answer UNRELATED and stop. Only when they share the same subject, classify how they relate:
 
+UNRELATED. different subjects or systems, no relationship between them
 SUPERSEDED. the newer memory completely replaces the older (same information, updated values/state)
 EVOLVED. a decision or understanding genuinely changed over time (the reasoning or conclusion shifted)
-CONTRADICTS. they state incompatible things and it's unclear which is current
-COMPATIBLE. they're about the same topic but don't actually conflict
+CONTRADICTS. they state incompatible things about the same subject and it's unclear which is current
+COMPATIBLE. they're about the same subject but don't actually conflict
 
 Respond EXACTLY in this format:
-<SUPERSEDED|EVOLVED|CONTRADICTS|COMPATIBLE>|<one-line explanation>
+<UNRELATED|SUPERSEDED|EVOLVED|CONTRADICTS|COMPATIBLE>|<one-line explanation>
 
 Examples:
+UNRELATED|One memory is about a Linux kernel CVE mitigation, the other about a chat bot's inference backend; different subjects
 SUPERSEDED|Database engine changed from Postgres 14 to Postgres 16; old version specifics are obsolete
 EVOLVED|Initial deployment used a single region; now multi-region with reasoning shifted toward redundancy over latency
-CONTRADICTS|Memory #42 says weekly backup; #89 says daily backup; unclear which is current
+CONTRADICTS|Memory #42 says the nightly backup runs at 02:00; #89 says the same job runs at 04:00; unclear which is current
 COMPATIBLE|Both describe the same server setup from different angles"""
 
 # --- Phase 4: Insight Synthesis ---

@@ -1026,7 +1026,7 @@ def phase_contradict(conn, mergeable_embeddings, mem_by_id, is_surge,
     them up. Returns stats dict.
     """
     stats = {"candidates": 0, "superseded": 0, "evolved": 0,
-             "contradicts": 0, "compatible": 0, "queued": 0}
+             "contradicts": 0, "compatible": 0, "unrelated": 0, "queued": 0}
 
     if len(mergeable_embeddings) < 2:
         log("Phase 4: Not enough memories for contradiction scan")
@@ -1314,6 +1314,20 @@ def phase_contradict(conn, mergeable_embeddings, mem_by_id, is_surge,
             stats["contradicts"] += 1
             log(f"    → CONTRADICTS: {explanation[:60]}")
 
+        elif classification == "UNRELATED":
+            stats["unrelated"] += 1
+            # Exhaustive same-project candidacy necessarily feeds the judge
+            # pairs that share a project but not a subject. Tombstone as
+            # cleared so the pair never re-enters the finder/judge loop.
+            conn.execute(
+                "INSERT OR IGNORE INTO memory_links "
+                "(source_id, target_id, relation_type, strength) "
+                "VALUES (?, ?, 'contradiction-cleared', 0.1)",
+                (older_id, newer_id),
+            )
+            conn.commit()
+            print(f"    → Unrelated (cleared): {explanation[:60]}", flush=True)
+
         else:
             stats["compatible"] += 1
             # Tombstone so the pair never re-enters the finder/judge loop
@@ -1331,14 +1345,15 @@ def phase_contradict(conn, mergeable_embeddings, mem_by_id, is_surge,
 
     log(f"Phase 4 done: {stats['candidates']} evaluated. "
         f"{stats['superseded']} superseded, {stats['evolved']} evolved, "
-        f"{stats['contradicts']} contradicts, {stats['compatible']} compatible")
+        f"{stats['contradicts']} contradicts, {stats['compatible']} compatible, "
+        f"{stats['unrelated']} unrelated")
     return stats
 
 
 def _parse_contradict(text):
     """Parse classification|explanation from LLM response."""
     text = text.strip()
-    valid = {"SUPERSEDED", "EVOLVED", "CONTRADICTS", "COMPATIBLE"}
+    valid = {"UNRELATED", "SUPERSEDED", "EVOLVED", "CONTRADICTS", "COMPATIBLE"}
 
     if "|" in text:
         parts = text.split("|", 1)

@@ -4,6 +4,29 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.21.0] - 2026-07-05 (contradiction judge gains an UNRELATED verdict)
+
+### Fixed
+- The phase-4 contradiction judge presumed its two inputs were about the
+  same topic (the prompt asserted "these memories are about similar
+  topics") and offered only SUPERSEDED / EVOLVED / CONTRADICTS /
+  COMPATIBLE. But candidacy is exhaustive same-project: the cosine floor
+  (CONTRADICT_MIN_SIM=0.60) is inert on multilingual-e5-large, where a
+  measured 45% of all active pairs clear 0.78, so the judge is routinely
+  handed same-project pairs about entirely different subjects. With no
+  way to say "these are unrelated", the model scope-conflated shared
+  vocabulary into false CONTRADICTS (observed: a hardened-VPS firewall
+  memory flagged as contradicting an on-prem office LAN memory). The
+  prompt now decides same-subject first and can answer UNRELATED;
+  unrelated pairs are tombstoned as contradiction-cleared so they never
+  re-enter the finder/judge loop. Validated by A/B on real
+  same-project-different-subject pairs plus unambiguous contradiction
+  controls: UNRELATED cleanly separates different subjects with zero
+  regression on true contradictions (RAM 64 vs 32, nginx vs Apache,
+  blood type, backup time all still flagged). Also replaced the ambiguous
+  "weekly vs daily backup" CONTRADICTS example (those coexist) with a
+  same-job time clash.
+
 ## [10.20.0] - 2026-07-03 (phase 0.5 removed; Nyx is namespace-scoped)
 
 ### Removed

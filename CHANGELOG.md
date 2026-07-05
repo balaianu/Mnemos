@@ -4,6 +4,24 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.23.0] - 2026-07-05 (doctor flags an empty store instead of blessing it)
+
+### Added
+- Empty-store detection in `doctor`: a store with 0 active memories for the
+  resolved namespace is reported as an issue with a config hint instead of
+  "healthy". A doctor run against the wrong MNEMOS_DB path or a mismatched
+  MNEMOS_NAMESPACE previously passed every check vacuously (each check
+  verified nothing and reported ok), which let a false all-clear survive
+  during the 2026-07-05 embed-formula incident. Two hint variants: a fully
+  empty database points at MNEMOS_DB (expected once for a brand-new store),
+  and a database whose memories all live in other namespaces lists the
+  per-namespace counts and points at MNEMOS_NAMESPACE. Populated stores gain
+  a "Store populated: N active memories" check line. No auto-fix on purpose:
+  an empty store has exactly two causes, fresh install (nothing to fix) or
+  misconfiguration (the fix is the caller's env, and guessing where the real
+  data lives is how a tool initializes an empty store at a wrong path and
+  buries the actual problem). 4 new tests; 264 pass.
+
 ## [10.22.0] - 2026-07-05 (embed-text excludes Nyx bookkeeping tags; coherence stays green)
 
 ### Fixed

@@ -1727,6 +1727,41 @@ class Mnemos:
         else:
             report["checks"].append("Schema is up to date (v10)")
 
+        # --- Empty-store detection (v10.23.0) ---
+        # "healthy" over 0 active memories is a vacuous green: in practice it
+        # means MNEMOS_DB points at the wrong file or MNEMOS_NAMESPACE does
+        # not match the data, and every downstream check passes on nothing
+        # (2026-07-05: exactly that helped a false all-clear survive). A
+        # brand-new store hits this once, which the wording allows for.
+        try:
+            active = conn.execute(
+                "SELECT COUNT(*) FROM memories WHERE status = 'active' "
+                "AND namespace = ?", (self.namespace,)).fetchone()[0]
+            if active > 0:
+                report["checks"].append(
+                    f"Store populated: {active} active memories in "
+                    f"namespace '{self.namespace}'")
+            else:
+                total = conn.execute(
+                    "SELECT COUNT(*) FROM memories").fetchone()[0]
+                if total == 0:
+                    report["issues"].append(
+                        "Store is empty: 0 memories in this database. "
+                        "Expected only for a brand-new store; otherwise "
+                        "MNEMOS_DB is probably pointing at the wrong file")
+                else:
+                    rows = conn.execute(
+                        "SELECT namespace, COUNT(*) AS n FROM memories "
+                        "GROUP BY namespace ORDER BY n DESC").fetchall()
+                    listing = ", ".join(f"'{r[0]}': {r[1]}" for r in rows)
+                    report["issues"].append(
+                        f"No active memories in namespace "
+                        f"'{self.namespace}' but the database holds "
+                        f"{total} memories ({listing}). Check "
+                        "MNEMOS_NAMESPACE if these should be visible here")
+        except Exception as e:
+            report["issues"].append(f"Empty-store check failed: {e}")
+
         # Detect missing auxiliary tables that v10.2+ expects
         existing_tables = {
             r[0] for r in conn.execute(

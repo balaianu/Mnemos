@@ -215,9 +215,25 @@ class TestSnippetExtraction:
 
 class TestDoctorMigrate:
     def test_doctor_reports_healthy_on_clean_db(self, m):
+        # A well-formed store with data reports healthy. Seeded (memory plus
+        # matching embedding row) because a fresh EMPTY store intentionally
+        # gets the empty-store hint since v10.23.0 (vacuous-green guard),
+        # and a memory without its embedding trips the coverage check.
+        from mnemos.constants import FASTEMBED_MODEL
+        from mnemos.embed import prep_memory_text, text_hash
+        conn = m.store._get_conn()
+        conn.execute(
+            "INSERT INTO memories (id, namespace, project, content, tags, "
+            "type, layer, status) VALUES (1, 'test', 'dev', 'F: seeded', "
+            "'', 'fact', 'semantic', 'active')")
+        thash = text_hash(prep_memory_text(
+            "dev", "F: seeded", "", mem_type="fact", layer="semantic"))
+        conn.execute(
+            "INSERT INTO embed_meta (source_db, source_id, text_hash, model) "
+            "VALUES ('memory', 1, ?, ?)", (thash, FASTEMBED_MODEL))
+        conn.commit()
         report = m.doctor(migrate=False)
-        # A fresh Mnemos init is well-formed; no issues expected
-        assert report["status"] == "healthy"
+        assert report["status"] == "healthy", report["issues"]
 
     def test_doctor_migrate_creates_missing_aux_tables(self, m, tmp_path):
         # Drop an aux table to simulate drift

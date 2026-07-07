@@ -3,7 +3,7 @@
 ## Design principles
 
 1. **A memory system should be a memory.** It stores data and retrieves it. That is the entire job. No LLM in the retrieval or storage pipeline. The agent thinks; Mnemos remembers.
-2. **CML is a language, not a compression algorithm.** Condensed Memory Language is a token-minimal notation the agent writes directly. It is not compressed or encoded; it is just denser English with structural prefixes and operators. Both humans and LLMs read it without decoding. The Nyx cycle cemelifies anything that slipped through as prose.
+2. **CML is a language, not a compression algorithm.** Condensed Memory Language is a token-minimal notation the agent writes directly. It is not compressed or encoded; it is just denser English with structural prefixes and operators. Both humans and LLMs read it without decoding. Prose that slips through is shaped into CML at store/ingest time (`cemelify()`), not by the Nyx cycle: since v10.20.0 the cycle never rewrites already-stored content in place.
 3. **Retrieval is configurable, not fixed.** Four modes, two flags: BM25 + vector only (lite), BM25 + vector + reranker (clean), BM25 + vector + CML (not recommended), BM25 + vector + reranker + CML (canonical). The reranker is enabled by default but not required for upper-90s numbers; even the lite mode lands in the same tier as any verified no-LLM number in the field.
 4. **Hybrid retrieval beats single-method.** Combining lexical (BM25) and semantic (vector) signals via RRF, then reranking with a cross-encoder, consistently outscores either alone.
 5. **Curated > Verbatim.** Memories are distilled facts, decisions, and learnings, not raw chat transcripts. Higher signal-to-noise.
@@ -74,7 +74,26 @@ The fundamental unit. Has:
 A typed relationship between two memories: `related`, `contradicts`, `supports`, etc. Stored with a strength (0-1).
 
 ### Nyx insight
-A consolidation event recording which source memories were merged into a result. Stored in the `nyx_insights` table. Includes `consolidation_type` (`aggregation` vs `supersession`) so tier-2 recall can decide whether expansion is safe.
+A consolidation event recording which source memories fed a result. Stored in the `nyx_insights` table. Includes `consolidation_type` (`aggregation` for a phase-2 merge, `synthesis` for a phase-5 insight), which the tier-2 `expand_merged` lineage join reads to walk a merged memory back to its sources.
+
+### Vector index tables
+Vectors live in a two-tier sqlite-vec layout:
+- **Active index**: `embed_vec` (the `vec0` virtual table holding the float vectors) paired with `embed_meta` (row provenance: `source_db`, `source_id`, `text_hash`, `model`, `embedded_at`). Every active memory has one row here.
+- **Tier-2 archived index** (v10.7.0): `embed_vec_arch` + `embed_meta_arch`, the same shape, holding vectors for memories that consolidation archived. Keeping the archived vectors in a separate index lets tier-2 recall KNN the originals directly (see tier-2 recall) instead of losing them at merge time. On new stores `embed_vec_arch` is created with a declared primary key (`vec0(id INTEGER PRIMARY KEY, ...)`); older implicit-rowid arch tables keep working through the `_arch_join_col` auto-detection used by every archive-side query.
+
+`embed_meta` and `embed_meta_arch` default `embedded_at` to local time (`datetime('now', 'localtime')`) so a synchronous embed lines up with its memory's `created_at`. Tables created before that DDL carried a UTC default; `mnemos doctor --migrate` detects the UTC dialect from the table SQL and rebuilds it with the localtime default (values converted DST-correctly).
+
+### Store self-check: `mnemos doctor`
+
+`mnemos doctor` runs a read-only health check over the store and reports issues without mutating anything; `mnemos doctor --migrate` applies the safe, reversible repairs behind an automatic pre-migration backup (the backup path is returned so a caller can roll back). It verifies, in order:
+
+- **Integrity** (`PRAGMA quick_check`) first, before any read that assumes a sane btree, catching page/btree corruption from an unsafe copy of a live WAL-mode DB.
+- **Schema drift**: the required `memories` columns and the v10.2+ auxiliary tables (`retrieval_log`, `tool_usage`, `consolidation_log`, `nyx_state`); `--migrate` backfills via `init_schema`.
+- **Empty-store detection** (v10.23.0): 0 active memories in the resolved namespace is flagged as a likely wrong `MNEMOS_DB` or `MNEMOS_NAMESPACE` rather than blessed as "healthy".
+- **FTS sync**: `memories` row count vs `memories_fts`; `--migrate` rebuilds the FTS index.
+- **Content/vector coherence** (v10.19.0): re-derives each active memory's embed-text hash from current content and compares it to the stored `embed_meta.text_hash`, catching content edited without a re-embed (direct SQL writes, or a write-path bug), which retrieval cannot otherwise see. Near-total mismatch is reported as an embed-text format change across versions, not row corruption; `--migrate` re-embeds the flagged rows.
+- **Vector-model provenance**: flags same-dimension vectors from a different embedder coexisting in one index (which makes every KNN comparison silently meaningless).
+- **Archive lifecycle** (v10.24.0): the UTC `embedded_at` dialect migration (above), orphan tier-2 rows left by pre-v10.24 hard deletes, and tier-2 completeness (archived memories missing a vector, or carrying a legacy pre-canonical hash, both pointing at `reindex-archived`).
 
 ## The retrieval pipeline
 
@@ -160,7 +179,7 @@ A conflict surfaces as a warning in the response to the caller plus a `memory_li
 
 ### The NLI decision layer (v10.15+)
 
-`mnemos/nli.py` supplies the scorers behind the `nli` modes above and the Phase 4 finder. Design points:
+`mnemos/nli.py` (opt-in extra `mnemos[nli]`) supplies the scorers behind the `nli` modes above and, since the zero-LLM cycle (v10.17.0), the nightly consolidation path: the phase-2 admission gate (`line_max_duplicate`), the mechanical merge's line dedup (`bidirectional_entailment`), and the phase-4 contradiction finder (`line_max_contradiction`, memoized in `nli_scan_cache` since v10.18.0). Design points:
 
 - **Two models, routed per comparison.** Content that reads as English (cheap stopword heuristic, `is_english()`) is scored by an English ANLI+FEVER-hardened DeBERTa-v3 checkpoint, the strongest benched; anything else goes to a multilingual XNLI mDeBERTa checkpoint (~100 languages). Both load lazily and independently. Pairing this with the [English-primary store convention](english-primary.md) puts the strong model on nearly every decision.
 - **Direction aggregation is load-bearing.** Contradiction takes the max over both premise/hypothesis orders (real conflicts score asymmetrically, benched 0.44 one way / 0.99 the other); duplicates take the min of both entailment directions (a duplicate entails mutually; a subset-fact does not, and correctly does not block).
@@ -171,7 +190,20 @@ A conflict surfaces as a warning in the response to the caller plus a `memory_li
 
 ## The Nyx cycle
 
-Modeled on brain sleep stages. Runs weekly (or on demand) to consolidate memories. Six phases, only phases 2-5 require an LLM (`MNEMOS_LLM_API_URL` + `MNEMOS_LLM_MODEL`). If no LLM is configured, phases 2-5 are skipped automatically and Nyx still runs as SQL-only housekeeping.
+Modeled on brain sleep stages. Six phases, run on a **two-tier schedule** since v10.17.0.
+
+The **nightly tier runs with zero LLM calls**: phases 1, 2, 4, 6. Cosine similarity nominates candidate pairs by mutual top-k rank, the NLI layer decides (phase-2 admission gate + line-level dedup + phase-4 contradiction finder), a mechanical line union executes merges (selection, never generation), and phase 4 queues contradiction-candidate links for later judging. No API key is needed.
+
+The **weekly tier is the optional LLM-driven enrichment layer**: phases 1, 2, 3, 4, 6, where phase 3 (weave) always calls an LLM, phase 2 becomes generative only under `MNEMOS_MERGE_ENGINE=llm`, and the phase-4 judge drains the nightly contradiction queue. Phase 5 (synthesize) is opt-in on top of that, enabled by the `--nyx` flag on the weekly script.
+
+Which phases actually call an LLM is derived at runtime from the configured engines, not fixed by phase number:
+
+- Phase 3 (weave) and phase 5 (synthesize) always generate text, so they always need an LLM.
+- Phase 2 (dedup) needs one only under the legacy `llm` merge engine; the default `mechanical` engine is selection, not generation.
+- Phase 4 (contradict) needs one only when its judge resolves to `llm`; the default `auto` judge falls back to `queue` (record-only) when no key is present.
+- Phases 1 (triage) and 6 (bookkeeping) are pure SQL.
+
+If no LLM is configured, the LLM-requiring phases are skipped with a grep-able `WARNING` and the core cycle continues (this replaced the pre-v10.17 loud-fail). `mnemos consolidate` behaves the same way: it runs the zero-LLM phases and warns on the ones it must skip rather than failing. `MNEMOS_DISABLE_LLM=1` opts into the same skip silently. Originals are archived, never deleted, throughout.
 
 ### Phase 1. Triage
 
@@ -179,18 +211,17 @@ Pure SQL. Reads `consolidation_log` to find the last run timestamp, then counts 
 
 ### Phase 2. Dedup
 
-Two-tier clustering and merge. Protection filters apply first, memories with `importance >= 9`, with the `evergreen` tag, or with `consolidation_lock = 1` are skipped entirely and not considered for merging.
+Cluster near-duplicate memories and merge each cluster into one. Protection filters apply first: memories with `importance >= 9`, the `evergreen` tag, `consolidation_lock = 1`, or `type = 'decision'` are excluded from merging (decisions are authoritative records, so they are woven and contradiction-scanned but never blended). They stay in the full embedding set so weave and contradict still reach them.
 
-**Clustering.** Two similarity thresholds, both running against the same embedding matrix:
+**Candidacy and clustering.** The default `MNEMOS_CANDIDACY=mutual-topk` builds pair candidacy from mutual top-k nearest-neighbor rank (`MNEMOS_CANDIDACY_TOP_K`, default 3) rather than an absolute cosine cutoff, because absolute thresholds are noise in the compressed e5 space (measured: 45% of all active pairs clear 0.78). A 0.5 cosine floor only guards degenerate cases. The legacy `threshold` candidacy keeps the absolute-cutoff behavior with `TIGHT_THRESHOLD = 0.88` (near-duplicate) and `TOPIC_THRESHOLD = 0.75` (same-topic). Clusters are capped at `MAX_CLUSTER_SIZE = 8`.
 
-- `TIGHT_THRESHOLD = 0.88` (tier 1A), near-duplicate detection
-- `TOPIC_THRESHOLD = 0.75` (tier 1B), same-topic merge
+**NLI admission gate.** Before any merge, each candidate cluster passes the NLI admission gate (`MNEMOS_CLUSTER_GATE=nli`, default; tau `MNEMOS_CLUSTER_GATE_TAU = 0.70`): a member stays only if it shares at least one line-level bidirectional-entailment fact with another member. Members with no shared fact are ejected; clusters left with fewer than two survivors dissolve unmerged. Cosine noise clusters that slipped through rank candidacy die here.
 
-Clusters are capped at `MAX_CLUSTER_SIZE = 8` to keep merge prompts tractable.
+**Merge engine.** The default `MNEMOS_MERGE_ENGINE=mechanical` is a zero-LLM line union: the atomic lines of all cluster members are pooled and deduplicated by bidirectional entailment (`MNEMOS_MECH_MERGE_TAU = 0.90`; lines shorter than `MNEMOS_MECH_MERGE_MIN_LINE_CHARS = 25` dedup by exact match only, a short-enumerated-line NLI failure class), with the newer phrasing winning on a duplicate. Every output line is an input line verbatim, so fact preservation holds by construction rather than by audit. The engine returns nothing (cluster skipped, logged loudly) when the NLI backend is unavailable; there is no silent fallback to an LLM in mechanical mode.
 
-**Merge strategy.** For clusters of size 2, one LLM call with the `MERGE_SYSTEM` prompt. For clusters of size 3 or more, **hierarchical pairwise merging**: each step merges two inputs at a time into one output, which then participates as an input at the next level. The LLM never sees more than two memories at once, so the natural per-step "this output should be roughly the size of its inputs" intuition holds even for deep clusters. A flat N-way merge of 8 memories forces the model into aggressive fact-dropping to hit a single-memory target size; the hierarchical variant removes that pressure and preserves specifics. The prompt itself is written in a co-location-not-compression style with an explicit self-audit rule ("before emitting, walk each input memory and confirm every distinct fact appears somewhere in the output").
+The opt-in `MNEMOS_MERGE_ENGINE=llm` restores the generative path. Clusters of size 2 run one LLM call with the `MERGE_SYSTEM` prompt. Clusters of size 3 or more use **hierarchical pairwise merging**: each step merges two inputs at a time into one output, which then participates as an input at the next level. The LLM never sees more than two memories at once, so the natural per-step "this output should be roughly the size of its inputs" intuition holds even for deep clusters. A flat N-way merge of 8 memories forces the model into aggressive fact-dropping to hit a single-memory target size; the hierarchical variant removes that pressure and preserves specifics. Under the mechanical engine the phase-2B topic tier is retired (aggregating distinct same-topic facts is generative, LLM-tier work); the llm engine keeps both the tight and topic tiers.
 
-**Storage side.** The new merged memory is stored with the `consolidated` tag and a `consolidation_type` of `aggregation`. Every source memory is flipped to `status='archived'` and its `tags` are appended with `merged-into-<new_id>`. Both the source's embedding and the new memory's embedding are updated in `embed_vec` in the same transaction. Nothing is deleted, the sources stay queryable via archive-aware retrieval paths (see tier-2 recall).
+**Storage side.** The merged memory is stored with the `consolidated` tag, `consolidation_type = 'aggregation'`, and a `nyx_insights` lineage row naming the source ids (the lineage the tier-2 `expand_merged` join reads). Every source memory is flipped to `status='archived'`, its `tags` appended with `merged-into-<new_id>`, and its vector moved into the tier-2 archived index in the same step (via `archive_memory`, v10.24.0). Nothing is deleted; the sources stay queryable via archive-aware retrieval paths (see tier-2 recall).
 
 ### Phase 3. Weave
 
@@ -198,35 +229,41 @@ Scans pairs of memories from different projects for cross-category connections. 
 
 ### Phase 4. Contradict
 
-Scans same-project decision/fact pairs and classifies their relationship. Candidate selection has two modes (`MNEMOS_NYX_CONTRADICT_FINDER`):
+Scans same-project decision/fact pairs and classifies their relationship. It scans the **full active set** (`all_embeddings`), not just the mergeable subset, so protected memories (decisions, verified, `importance >= 9`), exactly the population most worth contradiction-scanning, are included. Pairs already carrying a verdict or candidate link are skipped before scoring, so a cleared pair never re-enters the loop.
+
+**Finding** candidate pairs has two modes (`MNEMOS_NYX_CONTRADICT_FINDER`):
 
 - **`cosine` (default)**: pairs inside a similarity band (`CONTRADICT_MIN_SIM`..`CONTRADICT_MAX_SIM`). Cheap, but the band ceiling excludes near-identical pairs, which is exactly where value-conflicts ("X is 64GB" vs "X is 32GB") live.
-- **`nli` (recommended with the NLI layer installed)**: floor-only cosine gate, then the line-level NLI finder scores each pair and only pairs at P(contradiction) >= `MNEMOS_NLI_FINDER_THRESHOLD` (default 0.8, recall-first) reach the LLM judge. The judge keeps precision; the finder stops it drowning in same-topic-compatible pairs.
+- **`nli` (recommended with the NLI layer installed)**: floor-only cosine gate, then the line-level NLI finder scores each pair and only pairs at P(contradiction) >= `MNEMOS_NLI_FINDER_THRESHOLD` (default 0.8, recall-first) advance. Scores are memoized in `nli_scan_cache` keyed on content hashes (v10.18.0), so a static pair is scored once and costs nothing on later nights; `MNEMOS_NLI_FINDER_MAX_PAIRS` budgets only advanced pairs and never-scored ones backfill across subsequent runs.
 
-The LLM outputs one of four labels:
+**Judging** the flagged pairs has two modes (`MNEMOS_CONTRADICT_JUDGE`, default `auto`, which resolves to `llm` when a key is present and `queue` when not):
 
-- `COMPATIBLE`, same topic, different aspects; no change
-- `SUPERSEDED`, newer memory updates the same fact with a new value; older gets a `valid_until` timestamp set to the newer memory's `created_at`, and a `memory_links` row is written with `relation_type='supersedes'` and `consolidation_type='supersession'`
-- `EVOLVED`, a belief or preference that genuinely shifted over time; both versions stay queryable, the older gets a `valid_until` but also a `relation_type='evolves'` link so the evolution chain is preserved for tier-2 recall and for user queries like "when did I stop believing X?"
-- `CONTRADICTS`, two memories state incompatible things and it is not clear which is current; flagged with `relation_type='contradicts'` but neither is marked superseded. Leaves the disambiguation to either the user or the next consolidation cycle with more context.
+- **`queue` (zero-LLM nightly tier)**: each flagged pair is recorded as a `contradiction-candidate` link and left inert (no archiving, no `valid_until` edits). A later LLM-judged run consumes the queue.
+- **`llm`**: consumes any queued candidates first, then fresh pairs, classifying each with the `CONTRADICT_SYSTEM` prompt into one of **five** labels:
+  - `COMPATIBLE`, same topic, different aspects; tombstoned with a `contradiction-cleared` link so it never re-enters the finder/judge loop.
+  - `UNRELATED` (v10.21.0), same project but a different subject (exhaustive same-project candidacy necessarily feeds these); also tombstoned `contradiction-cleared`. Added because without a way to say "unrelated" the judge scope-conflated shared vocabulary into false `CONTRADICTS`.
+  - `SUPERSEDED`, newer memory updates the same fact with a new value; the older gets a `valid_until` set and is archived, with a `superseded_by` link to the newer. A `verified` or `importance >= 9` older memory keeps its status and only records the link (blast-radius guard, since the verdict derives from untrusted memory content).
+  - `EVOLVED`, a belief or preference that genuinely shifted over time; both versions stay queryable, the older gets a `valid_until` plus an `evolves` link so the evolution chain is preserved for user queries like "when did I stop believing X?"
+  - `CONTRADICTS`, two memories state incompatible things and it is not clear which is current; flagged with a `contradicts` link but neither is marked superseded. Leaves the disambiguation to the user or a later cycle with more context.
 
-This is the **batch** contradiction pass. The real-time on-store contradiction check (see the [Contradiction detection](../README.md#contradiction-detection-real-time-on-store) section of the README) runs a lighter non-LLM version, vector similarity plus same-project filter plus cross-encoder rerank, every time `memory_store()` is called, so obvious conflicts get flagged immediately in the response rather than having to wait a week.
+This is the **batch** contradiction pass. The real-time on-store contradiction check (see the [Contradiction detection](../README.md#contradiction-detection-real-time-on-store) section of the README) runs a lighter non-LLM version, vector similarity plus same-project filter plus a classification tier, every time `memory_store()` is called, so obvious conflicts get flagged immediately in the response rather than having to wait for a cycle.
 
 ### Phase 5. Synthesize
 
-Feeds clusters of semantically-related memories into the LLM and asks for novel observations: recurring themes, cross-domain patterns, tensions, preferences evolving in parallel across domains. The output is stored as new memories with `type='learning'`, `layer='semantic'`, and a `nyx_insights` row linking back to the source memories that informed the insight. These synthesized memories participate in future searches like any other fact and are themselves eligible for further consolidation in later Nyx cycles, so the system's self-generated observations compound over time rather than being one-shot reports.
+Opt-in (not in the default phase set; enabled by the weekly script's `--nyx` flag). Feeds clusters of semantically-related memories into the LLM and asks for novel observations: recurring themes, cross-domain patterns, tensions, preferences evolving in parallel across domains. The output is stored as new memories with `type='learning'`, `layer='semantic'`, and a `nyx_insights` row linking back to the source memories that informed the insight. These synthesized memories participate in future searches like any other fact and are themselves eligible for further consolidation in later Nyx cycles, so the system's self-generated observations compound over time rather than being one-shot reports.
 
 ### Phase 6. Bookkeeping
 
 Pure SQL, always runs regardless of LLM configuration.
 
 - **Temporal decay**: adjust `importance` downward for memories with recent `access_count` below a threshold, following exponential-decay half-lives (`EPISODIC_HALFLIFE_DAYS` and `SEMANTIC_HALFLIFE_DAYS` in `constants.py`). Nothing is deleted, decayed memories just rank lower in hybrid search until access revives them.
-- **Orphan cleanup**: remove rows in `embed_vec` and `embed_meta` whose `source_id` no longer exists in `memories` (archived memories keep their embeddings; only deleted ones get cleaned).
-- **Stale link pruning**: drop `memory_links` rows where either endpoint has been archived for longer than the `STALE_LINK_DAYS` threshold, so the link graph reflects the current active memory surface without dragging old archived chains along.
+- **Orphan vector hygiene** (tier-2 aware since v10.7.0): a vector whose memory was archived is *moved* from the active index (`embed_vec`/`embed_meta`) into the tier-2 archived index (`embed_vec_arch`/`embed_meta_arch`) so tier-2 recall can still reach the original; a vector is only removed outright when its memory row no longer exists at all (a hard delete). This is the end-of-cycle safety net behind the per-archive move `archive_memory` now does inline.
+- **Stale link pruning**: drop `memory_links` rows where either endpoint has been archived, so the link graph reflects the current active memory surface without dragging old archived chains along.
+- **Scan-cache cleanup**: drop `nli_scan_cache` rows whose pair references a non-active memory (archived or deleted memories can never re-enter the phase-4 candidate set, so their cached scores are dead weight).
 
 ### LLM configuration
 
-Phases 2-5 call through the `llm_utils` abstraction. `MNEMOS_LLM_MODEL` is the global default; per-phase env var overrides are first-class:
+When they run in their LLM modes (weave and synthesize always; merge only under `MNEMOS_MERGE_ENGINE=llm`; contradict only under an `llm` judge), these phases call through the `llm_utils` abstraction. `MNEMOS_LLM_MODEL` is the global default; per-phase env var overrides are first-class:
 
 | Env var | Phase | Falls back to |
 |---|---|---|
@@ -265,7 +302,12 @@ Per-phase tests were run with `/root/scripts/nyx-phase-quality-check.py` and the
 
 ### Tier-2 recall
 
-Merging is never silent deletion. The archived originals of any merged memory stay in the database with a `merged-into-<id>` tag on their own row and a `memory_links` chain pointing at the merged result. The retrieval pipeline's `auto_widen` behavior uses this chain: when a query's top-K results include a consolidated memory and the caller asks for episodic detail (or when retrieval is thin and needs to surface more context), Mnemos walks the `merged-into-*` tags backward from the merged memory to its constituents and returns them alongside. The merged memory is the fast path; the sources are the precision path.
+Merging is never silent deletion. The archived originals of any merged memory stay in the database (`status='archived'`, `merged-into-<id>` appended to their tags), with their vectors moved into the separate tier-2 archived index (`embed_vec_arch`/`embed_meta_arch`) rather than dropped. Tier-2 recall is opt-in per search, via `memory_search(..., expand_merged=True)`, and reaches the originals through two complementary paths:
+
+1. **Lineage expansion.** For each consolidated result, Mnemos reads its `nyx_insights` source-id list and returns the originals under a `merged_from` key, filtered to exclude any source superseded via `valid_until`. This surfaces the constituents of a merged memory that already ranked.
+2. **Direct archived KNN** (v10.7.0). The query embedding is also KNN'd against `embed_vec_arch` directly, so an archived original is reachable even when its consolidated parent did not rank in primary search. Fresh hits come back under a `tier2_recall` key with their vector distances.
+
+The merged memory is the fast path; the archived sources are the precision path. `mnemos reindex-archived` backfills the tier-2 index, embedding any archived memory that has no arch vector yet and re-embedding rows carrying a legacy pre-canonical hash (idempotent). The lifecycle around this index was hardened in v10.24.0: soft-delete/archive moves the vector into tier-2 (`move_embedding_to_archive`), hard-delete purges the tier-2 rows too, and `mnemos doctor` reports archived memories missing a tier-2 vector as an incomplete index pointing at `reindex-archived`.
 
 ## Storage backends
 

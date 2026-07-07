@@ -21,7 +21,7 @@ I am comparing against MemPalace specifically because they are, by their own acc
 | Contradiction detection      | None | **Auto-detect on store + memory_links** |
 | Hierarchical organization    | Wing/Room metadata | **project/subcategory metadata** |
 | MCP tools                    | 19 (manual navigation) | **4 (CRUD + search)** |
-| Consolidation                | Mining modes | **6-phase Nyx cycle (LLM-driven)** |
+| Consolidation                | Mining modes | **6-phase Nyx cycle (two-tier: zero-LLM nightly, LLM weekly)** |
 | Auto-widen on thin results   | None | **Cross-project fallback** |
 
 The article I read about MemPalace, the one that changed my mind on whether to release my system or not, talked about it like it was the next best thing since AI sliced bread. When I actually looked at the architecture, my reaction was different. To me MemPalace sounds like overly complex mimicry of how the human brain organizes memories spatially, when the AI on the other end neither wants nor needs a spatial metaphor to retrieve information. It just needs a good search, and the complexity may carry more structural overhead than the retrieval task requires. Their headline "+34% palace boost" is, by their own transparency note, what you get from any standard ChromaDB metadata filter.

@@ -83,14 +83,15 @@ mnemos map                           # topic index by project + subcategory
 mnemos digest --days 7               # recent memories
 mnemos briefing                      # compact ~370-token session-start summary
 mnemos embed-status                  # vector coverage report
-mnemos doctor                        # health check (schema, FTS, embeddings, stale)
+mnemos reindex-archived              # backfill tier-2 vectors for archived memories
+mnemos doctor                        # health check (schema, FTS/vector sync, coherence, tier-2); --migrate applies safe repairs
 
 # Predictive priming (used by session hooks)
 mnemos prime "current task description"
 
-# Nyx cycle consolidation (requires LLM, see below)
+# Nyx cycle consolidation (nightly tier is zero-LLM; weekly LLM tier optional, see below)
 mnemos consolidate                   # dry run, default phases
-mnemos consolidate --execute         # apply changes
+mnemos consolidate --execute         # apply changes (runs the zero-LLM core; LLM phases run only if a key is set)
 mnemos consolidate --nyx --execute   # include synthesis (Phase 5)
 
 # MCP server (typically invoked by your AI client, not directly)
@@ -99,7 +100,7 @@ mnemos serve
 
 ## Optional: Nyx cycle consolidation
 
-Mnemos can run a 6-phase weekly **Nyx cycle** that merges related memories, detects contradictions, and synthesizes cross-domain insights. The LLM-driven phases (Dedup, Contradict, Synthesize) need an API endpoint. **Phase 6 (Bookkeeping) always runs without an LLM** and handles vector cleanup, decay, and stale link pruning purely in SQL.
+Mnemos can run a 6-phase **Nyx cycle** that merges related memories, detects contradictions, and synthesizes cross-domain insights. Since v10.17.0 it is two-tier. A **nightly tier runs with zero LLM calls**: SQL triage, a mechanical line-union merge (facts are selected and unioned, never model-generated), an NLI contradiction finder that queues candidate links, and Phase 6 bookkeeping (vector cleanup, decay, and stale-link pruning, purely in SQL). A **weekly LLM tier** adds the generative phases (cross-project Weave, an optional generative merge, the contradiction judge that drains the queue, and opt-in Synthesize) and is the only tier that needs an API endpoint.
 
 **Pick a smart model, not a fast one.** The Nyx cycle is intentionally a background job; it runs weekly (or whenever you trigger it) and the entire purpose is to take its time *thinking* about your memories. The quality of the consolidation, dedup, and cross-domain synthesis is bounded by how good the LLM is at reasoning, not by how fast it answers. A slow but capable model (Qwen 2.5 32B locally, Claude Sonnet/Opus, GPT-4o, DeepSeek R1) will produce much better results than a fast lightweight model. Latency does not matter here. Quality does. If your Nyx cycle takes 20 minutes to run instead of 2, that is fine, because it is running while you are asleep or doing something else.
 
@@ -121,7 +122,7 @@ export MNEMOS_LLM_MODEL=qwen2.5:14b
 # Or use OpenRouter, DigitalOcean Gradient, Together.ai, Groq, Fireworks, etc.
 ```
 
-Without these set, `mnemos consolidate` will skip LLM phases and only run bookkeeping. The core memory features (store/search/get/update plus bulk_rewrite/list_tags) **never require an LLM**. Mnemos itself only uses local CPU models for embeddings and reranking.
+Without these set, `mnemos consolidate --execute` still runs the zero-LLM nightly tier (triage, mechanical merge, NLI contradiction finder, bookkeeping) and skips only the LLM-requiring phases, emitting a grep-able WARNING instead of failing. The core memory features (store/search/get/update plus bulk_rewrite/list_tags) **never require an LLM**. Mnemos itself only uses local CPU models for embeddings and reranking.
 
 ### Per-phase model routing
 

@@ -55,20 +55,20 @@ Could a stronger reranker like Jina Reranker v3 push the numbers higher? Possibl
 - Optional sub-categories per project (e.g., `dev/myapp`, `finance/crypto`)
 - Free-form, no schema migration needed
 
-## Nyx cycle consolidation (the optional LLM-driven part of Mnemos)
+## Nyx cycle consolidation (zero-LLM nightly core, optional LLM enrichment)
 
-Modeled on brain sleep stages, runs weekly. **This is the only place in Mnemos where an LLM is involved at all**, store and retrieve never touch one. The Nyx cycle is opt-in (you invoke `mnemos consolidate`) and can be skipped entirely; without it, Mnemos still works as a complete memory system, you just don't get the adaptive enrichment layer.
+Modeled on brain sleep stages. Since v10.17.0 it runs in two tiers: a **zero-LLM nightly core** (phases 1, 2, 4, 6) and an **optional LLM-driven enrichment tier** (weekly). **When Mnemos touches an LLM at all it is only here**, store and retrieve never touch one. The Nyx cycle is opt-in (you invoke `mnemos consolidate`) and can be skipped entirely; without it, Mnemos still works as a complete memory system, you just don't get the adaptive enrichment layer.
 
 | # | Phase | What it does | Uses LLM? |
 |---|---|---|---|
 | 1 | **Triage** | detect new memories since last run | ✗ no, pure SQL |
-| 2 | **Dedup** | merge near-duplicates (cosine ≥0.88 tight, ≥0.75 topic); clusters larger than 2 memories are merged via hierarchical pairwise steps to preserve specifics at depth | ✓ yes |
+| 2 | **Dedup** | merge near-duplicates; the default mechanical engine unions existing fact lines (selection, not rewriting) behind an NLI cluster gate. The optional LLM engine (cosine ≥0.88 tight, ≥0.75 topic) merges larger clusters via hierarchical pairwise steps to preserve specifics at depth | ✗ default (mechanical); ✓ if `MNEMOS_MERGE_ENGINE=llm` |
 | 3 | **Weave** | find cross-category relationships, create `memory_links` | ✓ yes |
-| 4 | **Contradict** | classify same-topic memory pairs across time: supersedes, evolves, contradicts, or compatible; update `memory_links` and `valid_until` markers accordingly | ✓ yes |
+| 4 | **Contradict** | classify same-topic memory pairs across time: supersedes, evolves, contradicts, compatible, or unrelated; update `memory_links` and `valid_until` markers accordingly. Default is an NLI finder that queues candidates (no LLM); the LLM judge that drains the queue is optional | ✗ default (NLI + queue); ✓ optional LLM judge |
 | 5 | **Synthesize** | generate cross-domain insights | ✓ yes |
 | 6 | **Bookkeeping** | decay old memories, cleanup orphans, prune stale links | ✗ no, pure SQL |
 
-Phases 2 through 5 require an OpenAI-compatible endpoint (`MNEMOS_LLM_API_URL` + `MNEMOS_LLM_MODEL`). Any model works: OpenAI, Anthropic, local Ollama / llama.cpp, OpenRouter, DigitalOcean Gradient, Together.ai, Groq, Fireworks, anything that speaks the chat-completions protocol. **If no LLM is configured, phases 2-5 are skipped automatically with a warning, and phases 1 and 6 still run.** Phase 1 (Triage) and Phase 6 (Bookkeeping) are pure SQL housekeeping that work on every deployment regardless of LLM availability.
+The **nightly core runs with zero LLM calls**: phases 1, 2, 4, and 6, where cosine nominates candidates, an NLI gate admits or ejects clusters, a mechanical line-union engine executes merges (it selects and unions existing fact lines, it never rewrites or generates them), and the phase-4 NLI finder queues contradiction candidates. None of that needs an API key. The **weekly enrichment tier is the optional LLM-driven part**: it adds phase 3 (Weave), a generative merge (only when `MNEMOS_MERGE_ENGINE=llm`), and a phase-4 LLM judge that drains the nightly contradiction queue; phase 5 (Synthesize) is opt-in via `--nyx`. Only these LLM-tier phases need an OpenAI-compatible endpoint (`MNEMOS_LLM_API_URL` + `MNEMOS_LLM_MODEL`). Any model works: OpenAI, Anthropic, local Ollama / llama.cpp, OpenRouter, DigitalOcean Gradient, Together.ai, Groq, Fireworks, anything that speaks the chat-completions protocol. **If no LLM is configured, `mnemos consolidate --execute` runs the zero-LLM core and skips only the LLM-requiring phases with a grep-able warning, instead of failing.** Phase 1 (Triage) and Phase 6 (Bookkeeping) are pure SQL housekeeping that work on every deployment regardless of LLM availability.
 
 Per-phase model routing, env vars, and recommended models in [usage.md](usage.md#per-phase-model-routing). The narrative on what the Nyx cycle actually learns about you over time lives in [philosophy.md](philosophy.md#adaptive-learning-how-mnemos-gets-to-know-you).
 

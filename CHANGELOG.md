@@ -4,6 +4,21 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.24.1] - 2026-07-11 (phase-4 queued-candidate cosine no longer stubbed)
+
+### Fixed
+- **Consumed queued contradiction candidates reported `sim=1.000` for every
+  pair.** When the LLM tier drains `contradiction-candidate` links queued by an
+  earlier zero-LLM run, it rebuilt each pair with a hardcoded `1.0` cosine
+  because the consumer read only `(source_id, target_id)` from `memory_links`.
+  The queue insert already stores the finder cosine in `strength`
+  (`round(min(cos, 0.99), 3)`), so the consumer now reads it back. Real cosines
+  (measured 0.89 to 0.95 on the affected prod pairs) surface again in the phase-4
+  log instead of a misleading 1.000. Cosmetic only: the flagged set and judge
+  verdicts were always correct; the stubbed sim just made recall-first finder
+  output look like a scoring failure. Pairs queued before this fix still show
+  1.000 until re-queued (their original cosine was never persisted for those).
+
 ## [10.24.0] - 2026-07-07 (archive-side embedding lifecycle: no more tier-2 leaks)
 
 Driven by a forensic audit of the prod embedding-row lifecycle (the open item

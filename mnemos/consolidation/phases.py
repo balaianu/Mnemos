@@ -1210,10 +1210,10 @@ def phase_contradict(conn, mergeable_embeddings, mem_by_id, is_surge,
     queued_pairs = []
     try:
         rows = conn.execute(
-            "SELECT source_id, target_id FROM memory_links "
+            "SELECT source_id, target_id, strength FROM memory_links "
             "WHERE relation_type = 'contradiction-candidate'"
         ).fetchall()
-        for s, t in rows:
+        for s, t, strength in rows:
             if execute:
                 conn.execute(
                     "DELETE FROM memory_links WHERE relation_type = "
@@ -1221,7 +1221,10 @@ def phase_contradict(conn, mergeable_embeddings, mem_by_id, is_surge,
                     (s, t),
                 )
             if s in mem_by_id and t in mem_by_id:
-                queued_pairs.append((s, t, 1.0))
+                # strength holds the finder cosine (queue insert stores
+                # round(min(cos, 0.99), 3)); reuse it so the consumed pair
+                # reports its real sim instead of a 1.0 stub.
+                queued_pairs.append((s, t, float(strength) if strength is not None else 1.0))
         if execute and rows:
             conn.commit()
         if queued_pairs:

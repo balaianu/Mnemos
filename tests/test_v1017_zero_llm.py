@@ -239,6 +239,25 @@ class TestJudgeQueue:
         assert left == 0
         assert stats["candidates"] >= 1
 
+    def test_consumed_queued_pair_keeps_its_cosine(self, tmp_path, monkeypatch, capsys):
+        # A queued candidate stores the finder cosine in link.strength. When the
+        # LLM tier consumes it, the surfaced sim must be that cosine, not a 1.0
+        # stub - otherwise every queued pair mis-reports sim=1.000.
+        monkeypatch.delenv("MNEMOS_NYX_CONTRADICT_FINDER", raising=False)
+        store, conn, mem_by_id, embeddings = _phase4_fixture(tmp_path)
+        conn.execute(
+            "INSERT INTO memory_links (source_id, target_id, relation_type, "
+            "strength) VALUES (1, 2, 'contradiction-candidate', 0.907)")
+        conn.commit()
+        monkeypatch.setattr(
+            phases, "opus_chat",
+            lambda *a, **k: "CLASSIFICATION: COMPATIBLE\nEXPLANATION: fine")
+        phase_contradict(conn, embeddings, mem_by_id,
+                         is_surge=False, execute=True, judge="llm")
+        out = capsys.readouterr().out
+        assert "sim=0.907" in out
+        assert "sim=1.000" not in out
+
 
 class TestScanCache:
     """nli_scan_cache memoization for the phase-4 finder (10.18.0)."""

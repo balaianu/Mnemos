@@ -49,6 +49,19 @@ def _arch_join_col(conn):
     return _vec_join_col_conn(conn, "embed_vec_arch")
 
 
+def _summarize_quick_check(rows):
+    """Reduce PRAGMA quick_check output to (ok, summary). quick_check yields a
+    single 'ok' row when clean, or one row per problem when corrupt; report the
+    first few plus a count so the extent of corruption isn't hidden."""
+    msgs = [r[0] for r in rows] or ["ok"]
+    if msgs == ["ok"]:
+        return True, "ok"
+    shown = "; ".join(msgs[:3])
+    if len(msgs) > 3:
+        shown += f"; (+{len(msgs) - 3} more)"
+    return False, shown
+
+
 def _store_archived_embedding_conn(conn, mid, embedding, text_hash=None,
                                    commit=True, model=None,
                                    source_key="memory"):
@@ -198,6 +211,7 @@ class SQLiteStore(MnemosStore):
     """SQLite + FTS5 + sqlite-vec storage backend."""
 
     SOURCE_KEY = "memory"
+    supports_maintenance = True
 
     def __init__(self, db_path: Optional[str] = None, namespace: str = DEFAULT_NAMESPACE):
         super().__init__(namespace=namespace)
@@ -1288,12 +1302,18 @@ class SQLiteStore(MnemosStore):
             params,
         ).fetchall()
         ids = [r["id"] for r in rows]
+        # Idempotency: skip memories that already have split children, so a
+        # re-run (e.g. with hard=True for the single-line residue) never
+        # double-splits the already-atomized backlog.
         done = set()
         for r in conn.execute(
             "SELECT tags FROM memories "
             "WHERE tags LIKE '%split-from:#%' AND namespace=?",
             (namespace,),
         ):
+            # findall, not search: a re-split child inherits its parent's
+            # split-from:#grandparent, so a single match would mark the
+            # grandparent done but never the immediate parent (infinite re-split).
             for gid in _re.findall(r"split-from:#(\d+)", r["tags"] or ""):
                 done.add(int(gid))
         ids = [i for i in ids if i not in done]
@@ -1353,6 +1373,10 @@ class SQLiteStore(MnemosStore):
             where += " AND project = ?"
             params.append(project)
         if tags:
+            # Word-boundary tag match: wrap both the stored tags CSV and the
+            # search pattern with commas so the LIKE query only matches the
+            # intended tag atom. Previous `LIKE '%foo%'` matched tags like
+            # 'unnamed' when user asked for 'name' - substring leak.
             where += " AND (',' || tags || ',') LIKE ?"
             params.append(f"%,{tags},%")
         if content_pattern:
@@ -1514,9 +1538,13 @@ class SQLiteStore(MnemosStore):
             "migrations_applied": [],
         }
 
-        # --- Integrity check ---
+        # --- Integrity check (FIRST, before any read that assumes a sane btree) ---
+        # Catches page/btree corruption, e.g. from an unsafe file copy of a live
+        # WAL-mode DB. Without this, doctor reported "healthy" on a malformed DB
+        # and the damage only surfaced as a "database disk image is malformed"
+        # blow-up at search time. quick_check is much faster than the full
+        # integrity_check on a large corpus and still catches this class.
         try:
-            from ..core import _summarize_quick_check
             ok, summary = _summarize_quick_check(
                 conn.execute("PRAGMA quick_check").fetchall()
             )
@@ -1540,6 +1568,11 @@ class SQLiteStore(MnemosStore):
             report["checks"].append("Schema is up to date (v10)")
 
         # --- Empty-store detection (v10.23.0) ---
+        # "healthy" over 0 active memories is a vacuous green: in practice it
+        # means MNEMOS_DB points at the wrong file or MNEMOS_NAMESPACE does
+        # not match the data, and every downstream check passes on nothing
+        # (2026-07-05: exactly that helped a false all-clear survive). A
+        # brand-new store hits this once, which the wording allows for.
         try:
             active = conn.execute(
                 "SELECT COUNT(*) FROM memories "
@@ -1702,21 +1735,24 @@ class SQLiteStore(MnemosStore):
                 mismatched.append(r["id"])
         return {"checkable": checkable, "mismatched_ids": mismatched}
 
-    def reembed_mismatched(self, namespace: str, mismatched_ids: list,
-                           embed_fn, text_hash_fn, prep_fn) -> int:
+    def reembed_mismatched(self, namespace: str, mismatched_ids: list) -> int:
+        # Same lazy ..embed import pattern as get_embed_coverage and
+        # get_coherence_mismatches: the embed model is heavy, only load it
+        # when a repair actually runs.
+        from ..embed import embed, prep_memory_text, text_hash
         conn = self._get_conn()
         repaired = 0
         for mid in mismatched_ids:
             r = conn.execute(
                 "SELECT project, content, tags, type, layer "
                 "FROM memories WHERE id = ?", (mid,)).fetchone()
-            text = prep_fn(
+            text = prep_memory_text(
                 r["project"], r["content"] or "", r["tags"] or "",
                 mem_type=r["type"] or "", layer=r["layer"] or "")
-            vecs = embed_fn([text], prefix="passage")
+            vecs = embed([text], prefix="passage")
             if vecs and vecs[0]:
                 self._store_embedding(
-                    mid, vecs[0], text_hash=text_hash_fn(text))
+                    mid, vecs[0], text_hash=text_hash(text))
                 repaired += 1
         return repaired
 

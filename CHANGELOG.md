@@ -4,6 +4,41 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.25.0] - 2026-07-25 (store abstraction: core.py no longer touches SQLite)
+
+First release with an external contribution. Thanks @balaianu.
+
+### Changed
+- **All direct SQLite access extracted from core.py into the store interface**
+  (#1, @balaianu). 12 new methods on `MnemosStore` with no-op defaults,
+  implemented in `SQLiteStore`: `find_oversized_memories`,
+  `find_cml_subject_matches`, `mark_retrieval_useful`,
+  `find_memories_by_content`, `get_briefing_memories`, `get_digest_memories`,
+  `get_project_map`, `get_unembedded_memories`, `get_embed_coverage`,
+  `health_check`, `get_coherence_mismatches` + `reembed_mismatched`,
+  `get_vector_provenance`, `check_archive_lifecycle`. core.py: 0 `_get_conn`
+  refs (was 19), 0 `hasattr(_get_conn)` guards (was 13). Pre-1.0 note: the
+  store ABC surface grew; custom backends inherit working no-op defaults.
+- `_summarize_quick_check` moved from core.py to sqlite_store.py (it
+  summarizes `PRAGMA quick_check`, which is SQLite-specific); re-exported
+  from `mnemos.core` for compatibility.
+- `reembed_mismatched` takes no embed callables anymore; it lazy-imports the
+  embed helpers itself, matching `get_embed_coverage` and
+  `get_coherence_mismatches`.
+
+### Fixed
+- **Maintenance surface on non-SQLite backends errors explicitly again.**
+  The extraction initially replaced the "requires SQLite" errors from
+  `doctor`, `bulk_rewrite`, `embed_fill`, `embed_status`, and
+  `remediate_oversized` with silent empty successes, letting a hypothetical
+  non-SQLite backend produce a vacuous "healthy" doctor report (same bug
+  class as the 10.23.0 empty-store false all-clear). New
+  `MnemosStore.supports_maintenance` capability flag (False by default,
+  True on SQLiteStore) restores the explicit errors.
+- Restored incident-anchored WHY comments that the extraction dropped
+  (re-split idempotency and findall-vs-search hazard, tag substring-leak,
+  integrity-check-first WAL-corruption rationale, empty-store rationale).
+
 ## [10.24.1] - 2026-07-11 (phase-4 queued-candidate cosine no longer stubbed)
 
 ### Fixed

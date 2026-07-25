@@ -62,6 +62,14 @@ class MnemosStore(ABC):
     will gracefully fall back to FTS-only mode.
     """
 
+    # Backends that can serve the maintenance surface (doctor, bulk_rewrite,
+    # embed_fill/status, remediate_oversized). Core returns an explicit
+    # "unsupported" error when this is False instead of a silent empty
+    # success, so a non-SQLite backend can never produce a vacuous
+    # "healthy" doctor report (same class of bug as the v10.23.0
+    # empty-store false all-clear).
+    supports_maintenance = False
+
     def __init__(self, namespace: str = "default"):
         self.namespace = namespace
 
@@ -438,8 +446,7 @@ class MnemosStore(ABC):
         """
         return {"checkable": 0, "mismatched_ids": []}
 
-    def reembed_mismatched(self, namespace: str, mismatched_ids: list,
-                           embed_fn, text_hash_fn, prep_fn) -> int:
+    def reembed_mismatched(self, namespace: str, mismatched_ids: list) -> int:
         """Re-embed memories whose content no longer matches their vector.
 
         Called by doctor --migrate. Returns count of successfully re-embedded

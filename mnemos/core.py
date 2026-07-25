@@ -22,7 +22,7 @@ from contextlib import contextmanager
 from typing import Optional
 
 from .storage.base import MnemosStore, Memory
-from .storage.sqlite_store import SQLiteStore
+from .storage.sqlite_store import SQLiteStore, _summarize_quick_check
 from .embed import embed, prep_memory_text, text_hash as embed_text_hash
 from .rerank import rerank, rrf_merge
 from .query import fts_dedup
@@ -74,19 +74,6 @@ def _regex_time_limit():
 
 def _sigmoid(x):
     return 1.0 / (1.0 + math.exp(-x))
-
-
-def _summarize_quick_check(rows):
-    """Reduce PRAGMA quick_check output to (ok, summary). quick_check yields a
-    single 'ok' row when clean, or one row per problem when corrupt; report the
-    first few plus a count so the extent of corruption isn't hidden."""
-    msgs = [r[0] for r in rows] or ["ok"]
-    if msgs == ["ok"]:
-        return True, "ok"
-    shown = "; ".join(msgs[:3])
-    if len(msgs) > 3:
-        shown += f"; (+{len(msgs) - 3} more)"
-    return False, shown
 
 
 def _corruption_hint(exc):
@@ -330,6 +317,8 @@ class Mnemos:
         mutations go through store APIs so FTS and vec stay consistent. Returns
         a summary dict. Reuses the same splitter as the live store path.
         """
+        if not self.store.supports_maintenance:
+            return {"error": "remediate-oversized requires the SQLite backend"}
         from .splitter import (split_content, split_is_lossless,
                                split_preserves_all_sentences, explode_cml_lines)
 
@@ -1284,6 +1273,10 @@ class Mnemos:
         if not pattern:
             return {"error": "pattern is required", "matched": 0,
                     "affected": 0, "changes": [], "dry_run": dry_run}
+        if not self.store.supports_maintenance:
+            return {"error": "bulk_rewrite only supported on SQLite-based stores",
+                    "matched": 0, "affected": 0, "changes": [],
+                    "dry_run": dry_run}
 
         import re
         regex = None
@@ -1506,6 +1499,8 @@ class Mnemos:
         this command before it existed. Missing vectors here are exactly the
         rows embed_status reports as `missing`.
         """
+        if not self.store.supports_maintenance:
+            return {"error": "embed-fill requires a SQLite-based store"}
         rows = self.store.get_unembedded_memories(
             self.namespace, limit=limit)
         filled = failed = 0
@@ -1528,6 +1523,8 @@ class Mnemos:
 
     def embed_status(self) -> dict:
         """Embedding coverage report."""
+        if not self.store.supports_maintenance:
+            return {"error": "embed status only supported on SQLite-based stores"}
         return self.store.get_embed_coverage(self.namespace)
 
     def doctor(self, migrate: bool = False) -> dict:
@@ -1545,6 +1542,8 @@ class Mnemos:
         Never drops data. Backup path is returned in the report so callers
         can roll back.
         """
+        if not self.store.supports_maintenance:
+            return {"error": "doctor only supported on SQLite-based stores"}
         report = self.store.health_check(self.namespace, migrate=migrate)
 
         # --- Embedding coverage ---
@@ -1603,9 +1602,7 @@ class Mnemos:
                     "changed without a re-embed")
                 if migrate:
                     repaired = self.store.reembed_mismatched(
-                        self.namespace, mismatched,
-                        embed_fn=embed, text_hash_fn=embed_text_hash,
-                        prep_fn=prep_memory_text)
+                        self.namespace, mismatched)
                     report["migrations_applied"].append(
                         f"re-embedded {repaired}/{len(mismatched)} "
                         "hash-mismatched memories")

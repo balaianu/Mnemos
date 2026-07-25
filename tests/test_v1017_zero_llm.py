@@ -181,6 +181,39 @@ def _phase4_fixture(tmp_path):
     return store, conn, mem_by_id, embeddings
 
 
+def _phase4_fixture_wide(tmp_path, n):
+    """Store with n same-project facts on a uniform 0.7 cosine.
+
+    Each vector is sqrt(0.7) on a shared axis plus sqrt(0.3) on its own, so
+    every one of the n*(n-1)/2 pairs sits at exactly 0.7: inside the finder
+    band, and enough pairs to see a per-run ceiling bite.
+    """
+    numpy = __import__("numpy")
+    store = _store(tmp_path)
+    conn = store._get_conn()
+    for mid in range(1, n + 1):
+        conn.execute(
+            "INSERT INTO memories (id, namespace, project, content, type, "
+            "status, created_at) VALUES (?, 't', 'server', ?, 'fact', "
+            "'active', ?)",
+            (mid, f"F: disk {mid} is {mid * 16}GB",
+             f"2026-01-01 00:00:{mid:02d}"),
+        )
+    conn.commit()
+    mem_by_id = {
+        r["id"]: dict(r) for r in conn.execute(
+            "SELECT * FROM memories").fetchall()
+    }
+    shared, own = 0.7 ** 0.5, 0.3 ** 0.5
+    embeddings = {}
+    for mid in range(1, n + 1):
+        v = numpy.zeros(DIMS, dtype="float32")
+        v[0] = shared
+        v[mid] = own
+        embeddings[mid] = v
+    return store, conn, mem_by_id, embeddings
+
+
 class TestJudgeQueue:
     def test_queue_mode_records_candidate_links(self, tmp_path, monkeypatch):
         monkeypatch.delenv("MNEMOS_NYX_CONTRADICT_FINDER", raising=False)
@@ -220,6 +253,18 @@ class TestJudgeQueue:
         stats = phase_contradict(conn, embeddings, mem_by_id,
                                  is_surge=False, execute=True, judge="queue")
         assert stats["queued"] == 0
+
+    def test_queue_mode_is_not_gated_by_the_llm_call_budget(self, tmp_path,
+                                                            monkeypatch):
+        # Queue mode issues zero LLM calls: queueing a candidate is a SQL
+        # insert. NORMAL_MAX_CALLS // 2 must therefore not cap it. Twenty
+        # memories at a uniform 0.7 cosine give 190 in-band pairs; the old
+        # ceiling silently discarded all but 15 of them per run.
+        monkeypatch.delenv("MNEMOS_NYX_CONTRADICT_FINDER", raising=False)
+        store, conn, mem_by_id, embeddings = _phase4_fixture_wide(tmp_path, 20)
+        stats = phase_contradict(conn, embeddings, mem_by_id,
+                                 is_surge=False, execute=True, judge="queue")
+        assert stats["queued"] == 190
 
     def test_llm_mode_consumes_queued_candidates(self, tmp_path, monkeypatch):
         monkeypatch.delenv("MNEMOS_NYX_CONTRADICT_FINDER", raising=False)

@@ -1181,7 +1181,14 @@ def phase_contradict(conn, mergeable_embeddings, mem_by_id, is_surge,
         log("  NLI finder requested but transformers/torch unavailable; "
             "using cosine candidates unscored")
 
-    candidates = candidates[:max_eval]
+    # max_eval budgets LLM calls. Queue mode makes none (a queued candidate is
+    # a SQL insert), so gating it by the call budget throws away flagged pairs
+    # for no reason: at the defaults that discarded all but 15 per run, and the
+    # surplus simply re-flagged the next night. Bound queue mode by the finder
+    # budget instead, which is the honest "pairs advanced per run" knob and
+    # still caps the cosine path, where nothing upstream bounds the candidates.
+    cap = NLI_FINDER_MAX_PAIRS if judge == "queue" else max_eval
+    candidates = candidates[:cap]
 
     if judge == "queue":
         # Zero-LLM tier: record flagged pairs as contradiction-candidate

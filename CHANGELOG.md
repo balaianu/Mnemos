@@ -4,6 +4,22 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.26.1] - 2026-07-25 (phase 4 queue mode is not an LLM call budget)
+
+### Fixed
+- **Queue mode discarded flagged pairs it had already paid to find.**
+  `phase_contradict` truncated its candidate list to `max_eval`
+  (`NORMAL_MAX_CALLS // 2`, so 15 at the defaults) before the `judge="queue"`
+  branch. That budget exists to cap LLM calls, and queue mode makes none:
+  queueing a candidate is a SQL insert. On a production store running the
+  two-tier split (zero-LLM nightly, LLM weekly) the nightly finder flagged
+  174 pairs, queued 15, and dropped the other 159, which re-flagged from the
+  scan cache the next night and were dropped again. Queue mode is now bounded
+  by `NLI_FINDER_MAX_PAIRS` (default 200), the "pairs advanced per run" knob,
+  which also keeps the cosine finder path capped since nothing upstream bounds
+  candidates there. `judge="llm"` behaviour is unchanged; queued pairs already
+  bypassed the truncation when consumed.
+
 ## [10.26.0] - 2026-07-25 (raw_connection escape hatch; single-sourced version)
 
 Completes the 10.25.0 store abstraction repo-wide.

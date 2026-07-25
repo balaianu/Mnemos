@@ -4,6 +4,27 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.26.2] - 2026-07-25 (audit log survives a pre-v10.2.1 consolidation_log)
+
+### Fixed
+- **A pre-v10.2.1 `consolidation_log` permanently disabled the audit log and
+  latched surge mode on.** `CREATE TABLE IF NOT EXISTS` is a no-op on an
+  existing table, so a DB whose `consolidation_log` predates `phase_details`
+  (v10.2.1) never gained the column: `_migrate_nyx_schema` backfilled only the
+  v10.5.0 counters. Every `log_consolidation_run()` INSERT then failed against
+  the missing column, and the failure was swallowed. `MAX(run_at)` stayed NULL,
+  so each cycle read `Last run: never`, phase 1 re-triaged the whole store,
+  `is_surge` latched on permanently, and phases 2 and 3 ran at the surge caps
+  forever. The backfill loop now carries per-column declarations and includes
+  `phase_details TEXT DEFAULT '{}'`.
+- **Audit write failures are no longer silent.** `log_consolidation_run()`
+  still never raises (the audit log is a side channel, not a correctness
+  dependency), but it now reports the reason on stderr. A swallowed write is
+  indistinguishable downstream from a cron that never fired, which is what let
+  the bug above survive undetected for months.
+
+Diagnosed on the angssatra deployment; reproduced and tested upstream.
+
 ## [10.26.1] - 2026-07-25 (phase 4 queue mode is not an LLM call budget)
 
 ### Fixed

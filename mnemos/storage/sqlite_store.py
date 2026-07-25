@@ -19,6 +19,7 @@ Recommended for personal/small-team deployments up to ~10K memories on SSD,
 import os
 import sqlite3
 import struct
+import sys
 from typing import Optional
 
 from .base import MnemosStore, Memory, SearchResult
@@ -1067,10 +1068,13 @@ class SQLiteStore(MnemosStore):
         SQL-only runs (no LLM, no clusters) still record meaningful counts in
         the main columns instead of leaving an all-zero-looking row.
 
-        Failures are swallowed: the audit log is a best-effort side
+        Failures are non-fatal: the audit log is a best-effort side
         channel, never a hard dependency of cycle correctness. Callers
         can rely on the run itself having completed even if logging
-        fails for storage reasons.
+        fails for storage reasons. They are not silent, though: a write
+        that never lands reads downstream as "Last run: never" on every
+        subsequent cycle, which is indistinguishable from a cron that
+        never fired, so the reason goes to stderr.
         """
         try:
             conn = self._get_conn()
@@ -1085,8 +1089,9 @@ class SQLiteStore(MnemosStore):
                  details, phase_details),
             )
             conn.commit()
-        except Exception:
-            pass
+        except Exception as e:
+            sys.stderr.write(f"Mnemos: consolidation_log write failed: {e}\n")
+            sys.stderr.flush()
 
     # --- Tool usage logging ---
 

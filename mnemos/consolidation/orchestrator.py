@@ -55,12 +55,19 @@ def _migrate_nyx_schema(conn):
             phase_details TEXT DEFAULT '{}'
         )
     """)
-    # Backfill the v10.5.0 bookkeeping columns on DBs whose consolidation_log
-    # predates them. SQLite has no ADD COLUMN IF NOT EXISTS, so the swallowed
-    # retry is the idempotency. Lets SQL-only runs log decay/demote counts.
-    for _col in ("access_decayed", "importance_demoted"):
+    # Backfill columns on DBs whose consolidation_log predates them: the
+    # v10.5.0 bookkeeping counters (so SQL-only runs log decay/demote), plus
+    # phase_details from v10.2.1. CREATE TABLE IF NOT EXISTS above is a no-op
+    # on an existing table, so a pre-v10.2.1 DB never gained that column and
+    # every log_consolidation_run() INSERT failed against it. The failure was
+    # swallowed, so MAX(run_at) stayed NULL and each cycle reported "Last run:
+    # never" and re-triaged the whole store, forever. SQLite has no ADD COLUMN
+    # IF NOT EXISTS, so the swallowed retry is the idempotency.
+    for _col, _decl in (("access_decayed", "INTEGER DEFAULT 0"),
+                        ("importance_demoted", "INTEGER DEFAULT 0"),
+                        ("phase_details", "TEXT DEFAULT '{}'")):
         try:
-            conn.execute(f"ALTER TABLE consolidation_log ADD COLUMN {_col} INTEGER DEFAULT 0")
+            conn.execute(f"ALTER TABLE consolidation_log ADD COLUMN {_col} {_decl}")
         except Exception:
             pass
     conn.execute("""

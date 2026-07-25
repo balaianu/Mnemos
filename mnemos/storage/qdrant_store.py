@@ -68,6 +68,10 @@ class QdrantStore(MnemosStore):
                 ),
             )
 
+    def raw_connection(self):
+        # Qdrant wraps an SQLite side for FTS + metadata; Nyx runs on that.
+        return self._sqlite._get_conn()
+
     def close(self):
         self._sqlite.close()
         try:

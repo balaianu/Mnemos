@@ -41,7 +41,7 @@ def _mnemos():
 
 def _fetch(m, mid):
     cols = ", ".join(_COLS)
-    return m.store._get_conn().execute(
+    return m.store.raw_connection().execute(
         f"SELECT {cols} FROM memories WHERE id=?", (mid,)).fetchone()
 
 

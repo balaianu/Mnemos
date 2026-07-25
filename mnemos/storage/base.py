@@ -481,3 +481,18 @@ class MnemosStore(ABC):
         report["backup"]. Default implementation is a no-op.
         """
         pass
+
+    # --- Sanctioned SQLite escape hatch (v10.26.0) ---
+
+    def raw_connection(self):
+        """Return the backend's underlying sqlite3.Connection, or None.
+
+        The sanctioned escape hatch for SQLite-native maintenance tooling
+        (the Nyx consolidation cycle, repo scripts) whose SQL surface is
+        deliberately not abstracted. Callers must handle None: a backend
+        without an SQLite side (e.g. Postgres) does not support these
+        tools. Nothing outside mnemos/storage/ should ever touch
+        _get_conn() or other private members directly; this method is the
+        one public door.
+        """
+        return None

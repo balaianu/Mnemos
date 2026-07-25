@@ -4,6 +4,29 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.26.0] - 2026-07-25 (raw_connection escape hatch; single-sourced version)
+
+Completes the 10.25.0 store abstraction repo-wide.
+
+### Added
+- **`MnemosStore.raw_connection()`**: the sanctioned escape hatch for
+  SQLite-native maintenance tooling. Returns the backend's underlying
+  `sqlite3.Connection` (SQLiteStore: its own; QdrantStore: its wrapped
+  SQLite side) or None on backends without one (Postgres). The Nyx
+  orchestrator and repo scripts now use it instead of groping
+  `_get_conn()` / `_sqlite._get_conn()` via hasattr. Nyx's SQL surface is
+  deliberately NOT abstracted behind interface methods; it is a
+  SQLite-native engine, and a declared capability is more honest than a
+  fake abstraction. Zero `_get_conn` references remain outside
+  `mnemos/storage/`.
+
+### Changed
+- **Version is single-sourced from `mnemos/__init__.py`** via
+  `[tool.setuptools.dynamic]`. The 10.25.0 release shipped with a stale
+  `__version__` because pyproject.toml and `__init__.py` each carried a
+  copy; now there is one place to bump and pip reads it at (re)install
+  time.
+
 ## [10.25.0] - 2026-07-25 (store abstraction: core.py no longer touches SQLite)
 
 First release with an external contribution. Thanks @balaianu.

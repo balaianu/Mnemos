@@ -2,9 +2,14 @@
 requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
 
+# Version is single-sourced from mnemos/__init__.py __version__.
+# Bump ONE place; pip picks it up at (re)install/build time.
+[tool.setuptools.dynamic]
+version = {attr = "mnemos.__version__"}
+
 [project]
 name = "mnemos"
-version = "10.25.0"
+dynamic = ["version"]
 description = "Persistent memory system for AI agents with reproducible benchmarks (98.94-99.15% R@5 on LongMemEval, CPU-only, MCP-native)"
 readme = "README.md"
 requires-python = ">=3.11"

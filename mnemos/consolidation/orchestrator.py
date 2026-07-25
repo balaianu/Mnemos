@@ -261,15 +261,13 @@ def run_nyx_cycle(
 
     Returns: dict of phase stats
     """
-    # Get the underlying SQLite connection (works for SQLiteStore and QdrantStore
-    if hasattr(store, "_get_conn"):
-        conn = store._get_conn()
-    elif hasattr(store, "_sqlite") and hasattr(store._sqlite, "_get_conn"):
-        conn = store._sqlite._get_conn()
-    else:
+    # Nyx is deliberately SQLite-native; raw_connection() is the sanctioned
+    # escape hatch (returns None on backends without an SQLite side).
+    conn = store.raw_connection()
+    if conn is None:
         raise ValueError(
-            "run_nyx_cycle requires a backend with a SQLite connection. "
-            "SQLiteStore or QdrantStore are supported)."
+            "run_nyx_cycle requires a backend with a SQLite connection "
+            "(SQLiteStore or QdrantStore)."
         )
 
     conn.row_factory = sqlite3.Row

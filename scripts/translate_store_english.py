@@ -107,7 +107,7 @@ def main():
         sys.exit("MNEMOS_DB not set")
     namespace = os.environ.get("MNEMOS_NAMESPACE", "default")
     store = SQLiteStore(db_path=db, namespace=namespace)
-    conn = store._get_conn()
+    conn = store.raw_connection()
 
     rows = [dict(r) for r in conn.execute(
         "SELECT id, project, content, tags, type, layer FROM memories "

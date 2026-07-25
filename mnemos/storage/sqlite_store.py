@@ -244,6 +244,9 @@ class SQLiteStore(MnemosStore):
         self.init_schema()
         return self._conn
 
+    def raw_connection(self):
+        return self._get_conn()
+
     def close(self):
         if self._conn is not None:
             try:

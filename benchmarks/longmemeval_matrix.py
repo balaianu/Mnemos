@@ -40,9 +40,57 @@ def retrieve(conn, mode, question, query_emb):
     raise ValueError(mode)
 
 
+def _stratify(data, n):
+    """Sample n questions across question types, keeping the scarce ones whole.
+
+    Plain truncation is useless here: the dataset is grouped by type, so the
+    first N questions are one or two categories. Proportional sampling is
+    better but starves `single-session-preference`, which has only 30 rows and
+    is the category that actually discriminates between configurations (it is
+    where CML without a reranker collapses to 53.33% R@1). So that one is kept
+    in full and the rest are sampled proportionally, the same way the Swedish
+    stratum is kept whole in the mixed-language bench.
+
+    Fixed seed: two runs of different models must score the identical subset
+    or the comparison between them means nothing.
+    """
+    import random
+    from collections import defaultdict
+    KEEP_WHOLE = {"single-session-preference"}
+    by_type = defaultdict(list)
+    for e in data:
+        by_type[e["question_type"]].append(e)
+
+    kept = [e for t in KEEP_WHOLE for e in by_type.get(t, [])]
+    rest = {t: v for t, v in by_type.items() if t not in KEEP_WHOLE}
+    budget = max(n - len(kept), 0)
+    total_rest = sum(len(v) for v in rest.values())
+
+    rnd = random.Random(20260818)
+    for t, rows in sorted(rest.items()):
+        take = round(budget * len(rows) / total_rest) if total_rest else 0
+        pool = list(rows)
+        rnd.shuffle(pool)
+        kept.extend(pool[:take])
+
+    order = {id(e): i for i, e in enumerate(data)}
+    kept.sort(key=lambda e: order[id(e)])
+    counts = {}
+    for e in kept:
+        counts[e["question_type"]] = counts.get(e["question_type"], 0) + 1
+    print(f"stratified sample: {len(kept)} questions "
+          + ", ".join(f"{t}={c}" for t, c in sorted(counts.items())), flush=True)
+    return kept
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--limit", type=int)
+    ap.add_argument("--limit", type=int,
+                    help="first N questions; the dataset is grouped by type so "
+                         "this is only useful for smoke tests")
+    ap.add_argument("--sample", type=int,
+                    help="stratified sample of N questions across question "
+                         "types (fixed seed, comparable across runs)")
     ap.add_argument("--modes", default="hybrid,hybrid+rerank")
     ap.add_argument("--granularity", default="session")
     ap.add_argument("--out", default=None)
@@ -60,6 +108,8 @@ def main():
         data = json.load(f)
     if args.limit:
         data = data[: args.limit]
+    if args.sample and args.sample < len(data):
+        data = _stratify(data, args.sample)
 
     print(f"model={FASTEMBED_MODEL} dims={FASTEMBED_DIMS} modes={modes} questions={len(data)}", flush=True)
     lmb.fastembed_embed(["warmup"], prefix="search_query")

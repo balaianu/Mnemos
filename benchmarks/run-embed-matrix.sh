@@ -10,7 +10,7 @@ run () {
   local model=$1 dims=$2 tag=$3
   echo "=== $(date '+%F %T') starting $tag ($model, $dims dims) ==="
   MNEMOS_EMBED_MODEL=$model MNEMOS_EMBED_DIMS=$dims \
-    $PY longmemeval_matrix.py --modes hybrid,hybrid+rerank \
+    $PY longmemeval_matrix.py --modes hybrid,hybrid+rerank --sample 180 \
       --tempdb /tmp/lme_$tag.db --out matrix_$tag.json
   echo "=== $(date '+%F %T') finished $tag ==="
 }

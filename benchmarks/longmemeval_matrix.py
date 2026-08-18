@@ -93,8 +93,14 @@ def main():
 
         if scored % 25 == 0:
             el = time.time() - t_start
+            # R@1 as well as R@5: R@5 saturates near the ceiling for every
+            # config, so it cannot discriminate between them. R@1 is where the
+            # headroom is, and it is what an agent reading the top hit gets.
             print(f"  {scored} scored | {el/scored:.1f}s/q | "
-                  + " | ".join(f"{m} R@5={sum(recall[m][5])/len(recall[m][5]):.1%}" for m in modes),
+                  + " | ".join(
+                      f"{m} R@1={sum(recall[m][1])/len(recall[m][1]):.1%}"
+                      f"/R@5={sum(recall[m][5])/len(recall[m][5]):.1%}"
+                      for m in modes),
                   flush=True)
 
     out = {"model": FASTEMBED_MODEL, "dims": FASTEMBED_DIMS, "questions": scored,

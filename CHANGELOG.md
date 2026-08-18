@@ -4,6 +4,15 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.31.1] - 2026-08-18 (CML operators reach the reranker too)
+
+### Fixed
+- **The reranker was reading raw CML while the embedder read normalized text.** `normalize_cml()` ran inside `embed()` only, so with `MNEMOS_EMBED_NORMALIZE_CML` on the two stages saw different documents. Harmless with the default reranker, which reads the operators natively, and not harmless with any other.
+- **The reranker now decides for itself.** `_probe_cml_support()` encodes each operator against the reranker's own tokenizer at load and spells them out for scoring only when that model cannot represent them. Detected rather than configured: a flag is one more thing to set wrong, and the tokenizer can answer the question directly. It logs a line when it engages.
+  Measured across the rerankers fastembed offers: `jina-reranker-v2-multilingual` (Unigram, 250k) loses 0 of 8 operators, `jina-reranker-v1-turbo-en` (BPE, 60k) loses 1, `ms-marco-MiniLM-L-6-v2` (WordPiece, 30k) loses all 8. So the need is per-model rather than a property of "small", and a hardcoded list would go stale.
+  This matters because the reranker is the component that RESCUES CML: the published ablation has `single-session-preference` R@1 going 53.33% to 80.00% when it is added, and the mechanism is that CML's structural markers are what a cross-encoder attends to. A reranker that maps every operator to one shared `[UNK]` cannot do that, which previously ruled out every small English reranker for a CML store.
+- `embed.apply_cml_map()` split out of `normalize_cml()` so the substitution can be used ungated by callers that decide their own policy.
+
 ## [10.31.0] - 2026-08-18 (bounded tensor shapes; a reaper on every transport)
 
 ### Fixed

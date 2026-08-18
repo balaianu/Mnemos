@@ -134,19 +134,30 @@ CML_EMBED_MAP = {
 }
 
 
-def normalize_cml(text):
-    """Replace CML operators with the words they stand for, for embedding only.
+def apply_cml_map(text):
+    """Substitute CML operators for the words they stand for. Ungated.
 
-    A no-op unless MNEMOS_EMBED_NORMALIZE_CML=1. Applied to every text on its
-    way to the encoder, documents and queries alike, so both sides of the index
-    are built from the same distribution.
+    Split out from normalize_cml so the reranker can decide for itself: the
+    embedder applies this on a config flag, while the reranker applies it only
+    when its own tokenizer cannot represent the operators.
     """
-    if not effective_normalize() or not text:
+    if not text:
         return text
     for sym, word in CML_EMBED_MAP.items():
         if sym in text:
             text = text.replace(sym, word)
     return _WS_RE.sub(" ", text)
+
+
+def normalize_cml(text):
+    """apply_cml_map, gated on MNEMOS_EMBED_NORMALIZE_CML.
+
+    Applied to every text on its way to the encoder, documents and queries
+    alike, so both sides of the index are built from the same distribution.
+    """
+    if not effective_normalize():
+        return text
+    return apply_cml_map(text)
 
 
 def embed_model_id():

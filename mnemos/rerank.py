@@ -15,7 +15,40 @@ from . import _resource
 
 _instance = None
 _last_used = 0.0
+# Resolved once at load: does THIS reranker's tokenizer lose CML operators?
+_needs_cml_map = False
 _lock = threading.Lock()
+
+
+def _probe_cml_support(encoder):
+    """Decide whether this reranker needs CML operators spelled out.
+
+    The reranker is the component that RESCUES CML: the published ablation has
+    single-session-preference R@1 going 53.33% -> 80.00% when it is added, and
+    the mechanism is that CML's structural markers are exactly what a
+    cross-encoder attends to. A reranker whose vocabulary maps every operator
+    to one shared [UNK] cannot do that.
+
+    Measured across the rerankers fastembed offers: jina-v2-multilingual
+    (Unigram, 250k) loses 0 of 8, jina-v1-turbo-en (BPE, 60k) loses 1, and
+    ms-marco-MiniLM (WordPiece, 30k) loses all 8. So this is per-model, not a
+    property of "small", and probing beats a hardcoded list that goes stale.
+
+    Detected rather than configured: a flag here is one more thing to set
+    wrong, and the tokenizer can answer the question directly.
+    """
+    from .embed import CML_EMBED_MAP
+    try:
+        tok = encoder.model.tokenizer
+        for sym in CML_EMBED_MAP:
+            if sym.isspace():
+                continue
+            toks = tok.encode(sym, add_special_tokens=False).tokens
+            if any(t in ("[UNK]", "<unk>") for t in toks):
+                return True
+        return False
+    except Exception:
+        return False
 
 
 def _pin_tokenizer_shape(encoder):
@@ -53,7 +86,7 @@ def _pin_tokenizer_shape(encoder):
 
 
 def _get_reranker():
-    global _instance, _last_used
+    global _instance, _last_used, _needs_cml_map
     with _lock:
         if _instance is None:
             _resource.guard_memory()
@@ -67,6 +100,12 @@ def _get_reranker():
                     kwargs["enable_cpu_mem_arena"] = False
                 _instance = TextCrossEncoder(**kwargs)
                 _pin_tokenizer_shape(_instance)
+                _needs_cml_map = _probe_cml_support(_instance)
+                if _needs_cml_map:
+                    import sys
+                    print(f"Mnemos: {RERANKER_MODEL} cannot represent CML "
+                          "operators; spelling them out for reranking",
+                          file=sys.stderr)
             except ImportError:
                 raise ImportError(
                     "Reranker requires fastembed[rerank]. Install with: "
@@ -120,7 +159,11 @@ def rerank(query: str, documents: list) -> list:
         return []
     try:
         model = _get_reranker()
-        texts = [_clip(d.get("text", "")) for d in documents]
+        prep = _clip
+        if _needs_cml_map:
+            from .embed import apply_cml_map
+            prep = lambda t: _clip(apply_cml_map(t))
+        texts = [prep(d.get("text", "")) for d in documents]
         scores = list(model.rerank(query, texts, batch_size=RERANK_BATCH))
     except Exception as e:
         import sys

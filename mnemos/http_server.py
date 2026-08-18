@@ -164,6 +164,12 @@ def serve(http: str | None = None, unix: str | None = None, mnemos=None) -> None
     if mnemos is None:
         mnemos = build_mnemos()
 
+    # The shared server never exits, so it is the deployment that most needs
+    # the idle reaper: a stdio harness reclaims its arena by dying.
+    from . import _resource
+    _resource.start_idle_reaper(
+        log=lambda m: (sys.stderr.write(m + "\n"), sys.stderr.flush()))
+
     servers = []
     if http:
         host, port = _parse_hostport(http)

@@ -26,6 +26,7 @@ is usable.
 import os
 import re
 import threading
+import time
 
 from .embed import embed
 from .constants import (
@@ -42,6 +43,7 @@ _NON_ASCII_LETTER = re.compile(r"[^\x00-\x7f]")
 
 _scorers = {}
 _scorer_lock = threading.Lock()
+_last_used = 0.0
 
 
 def _torch_available() -> bool:
@@ -184,8 +186,10 @@ def _get_scorer(multilingual=False):
     auto (default) prefers a local ONNX export and falls back to torch;
     onnx and torch use only that backend (raising when unusable, which the
     public score functions turn into a graceful None)."""
+    global _last_used
     key = "multi" if multilingual else "en"
     backend = os.environ.get("MNEMOS_NLI_BACKEND", "auto").lower()
+    _last_used = time.monotonic()
     with _scorer_lock:
         if key not in _scorers:
             onnx_dir = (None if backend == "torch"
@@ -200,6 +204,27 @@ def _get_scorer(multilingual=False):
                 model_id = NLI_MULTI_MODEL if multilingual else NLI_EN_MODEL
                 _scorers[key] = _TorchNliScorer(model_id)
         return _scorers[key]
+
+
+def maybe_unload(force=False):
+    """Drop idle NLI scorers, mirroring embed/rerank.
+
+    These were missing from the reaper entirely, so a night of quiet still
+    left both DeBERTa sessions resident with their own arenas. On a store
+    running MNEMOS_DEDUP_CONFIRM=nli and MNEMOS_CONTRADICT_MODE=nli that is
+    two of the four ONNX sessions on the process.
+    """
+    from . import _resource
+    global _scorers
+    with _scorer_lock:
+        if not _scorers:
+            return False
+        if not (force or (_resource.IDLE_TTL
+                          and time.monotonic() - _last_used > _resource.IDLE_TTL)):
+            return False
+        _scorers = {}
+    _resource.trim()
+    return True
 
 
 def _score_pair(a, b):

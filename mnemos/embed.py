@@ -17,7 +17,7 @@ from pathlib import Path
 from .constants import (
     FASTEMBED_MODEL, FASTEMBED_CACHE, FASTEMBED_DIMS, DISABLE_MEM_ARENA,
     EMBED_NORMALIZE_CML, EMBED_MODEL_EXPLICIT, EMBED_DIMS_EXPLICIT,
-    EMBED_NORMALIZE_EXPLICIT,
+    EMBED_NORMALIZE_EXPLICIT, EMBED_BATCH,
 )
 from . import _resource
 
@@ -285,7 +285,7 @@ def embed(texts, prefix="passage"):
         # here explicitly, all downstream thresholds (dedup, contradiction
         # detection) assume unit-norm vectors.
         out = []
-        for vec in model.embed(prefixed):
+        for vec in model.embed(prefixed, batch_size=EMBED_BATCH):
             v = list(vec)
             norm = math.sqrt(sum(x * x for x in v))
             if norm > 0:

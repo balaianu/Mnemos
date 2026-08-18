@@ -253,6 +253,38 @@ RERANKER_MODEL = os.environ.get(
     "jinaai/jina-reranker-v2-base-multilingual"
 )
 
+# --- Reranker / embedder tensor shape bounds ---
+# The ONNX Runtime CPU arena keeps the peak allocation of every tensor SHAPE it
+# has ever seen and never returns it. Shape here is (batch, sequence length),
+# and left alone both axes are free-running: fastembed defaults to batch 64 for
+# reranking and 256 for embedding, and nothing bounded sequence length at all,
+# so a wide search over long memories set a new high-water mark that the
+# process then held forever. Measured on a shared long-lived server: one
+# limit=20 search (a 60-document rerank pool) claimed 1.6 GB permanently, while
+# an identical-shape repeat cost 3% of that.
+# Bounding both axes collapses shape space to a small fixed set, so the arena
+# stops finding new highs and the RSS ceiling becomes a real ceiling rather
+# than a running maximum. This matters most under the shared HTTP transport
+# (v10.27.0): stdio harnesses used to reset the arena for free every time a
+# session ended, and a server that never exits removed that accident.
+# Set MAX_CHARS to 0 to disable truncation.
+RERANK_BATCH = int(os.environ.get("MNEMOS_RERANK_BATCH", "16"))
+# The sequence axis is NOT unbounded, which is the easy thing to get wrong:
+# Jina v2 caps at 1024 tokens and fastembed truncates there. What is free is
+# the PADDING. fastembed calls enable_padding() with no length, so every batch
+# pads to its own longest member, and one long memory in a batch of 16 drags
+# the other 15 up with it. Shape therefore varies continuously in [1, 1024]
+# with batch composition, which is what the arena keeps finding new highs in.
+# Pinning truncation AND padding to one length collapses that to a single
+# shape. 512 rather than 1024 because attention is quadratic: (512/1024)^2 is
+# a quarter of the peak. Set to 0 to leave fastembed's dynamic padding alone.
+RERANK_MAX_TOKENS = int(os.environ.get("MNEMOS_RERANK_MAX_TOKENS", "512"))
+# Superseded by the token pin above and kept only as an escape hatch: clipping
+# characters is a weak proxy for clipping tokens, and on a store of CML the
+# ratio varies enough that a char budget does not bound the tensor.
+RERANK_MAX_CHARS = int(os.environ.get("MNEMOS_RERANK_MAX_CHARS", "0"))
+EMBED_BATCH = int(os.environ.get("MNEMOS_EMBED_BATCH", "32"))
+
 # --- Reranker enable flag ---
 # Default ON: the cross-encoder reranker is part of the canonical Mnemos
 # pipeline and the configuration the benchmark numbers are reported on.

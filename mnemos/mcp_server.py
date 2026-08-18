@@ -440,19 +440,8 @@ def main():
     # Optional idle-unload reaper. Only starts when MNEMOS_MODEL_IDLE_TTL > 0;
     # on a memory-constrained host it returns embedder/reranker RSS to the OS
     # after they sit idle. No thread, and no effect, by default.
-    if _resource.IDLE_TTL > 0:
-        from . import embed as _embed_mod
-        from . import rerank as _rerank_mod
-
-        def _reaper():
-            while True:
-                time.sleep(60)
-                _embed_mod.maybe_unload()
-                _rerank_mod.maybe_unload()
-
-        threading.Thread(target=_reaper, daemon=True, name="mnemos-model-reaper").start()
-        sys.stderr.write(f"Mnemos: idle model reaper on (TTL {_resource.IDLE_TTL}s)\n")
-        sys.stderr.flush()
+    _resource.start_idle_reaper(
+        log=lambda m: (sys.stderr.write(m + "\n"), sys.stderr.flush()))
 
     while True:
         msg = read_msg()

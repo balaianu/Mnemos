@@ -9,12 +9,47 @@ batch of 20 documents on CPU.
 import threading
 import time
 
-from .constants import RERANKER_MODEL, FASTEMBED_CACHE, DISABLE_MEM_ARENA
+from .constants import (RERANKER_MODEL, FASTEMBED_CACHE, DISABLE_MEM_ARENA,
+                        RERANK_BATCH, RERANK_MAX_CHARS, RERANK_MAX_TOKENS)
 from . import _resource
 
 _instance = None
 _last_used = 0.0
 _lock = threading.Lock()
+
+
+def _pin_tokenizer_shape(encoder):
+    """Fix the sequence axis on the tokenizer fastembed already built.
+
+    Deliberately NOT a reimplementation of Jina's pair encoding: the published
+    benchmark is a fastembed score stream, and cloning its pre/post-processing
+    buys a permanent fidelity job. This only changes the truncation and padding
+    policy of the tokenizer object fastembed constructed, so token ids, special
+    tokens, pair template and post-processing all stay exactly as they were.
+
+    Reaches through a private attribute, so it degrades to a no-op with a
+    warning rather than failing the load if fastembed rearranges internals.
+    Returns True when the pin was applied.
+    """
+    if RERANK_MAX_TOKENS <= 0:
+        return False
+    try:
+        tok = encoder.model.tokenizer
+        pad = dict(tok.padding or {})
+        tok.enable_truncation(max_length=RERANK_MAX_TOKENS)
+        tok.enable_padding(
+            length=RERANK_MAX_TOKENS,
+            pad_id=pad.get("pad_id", 1),
+            pad_token=pad.get("pad_token", "<pad>"),
+            pad_type_id=pad.get("pad_type_id", 0),
+            direction=pad.get("direction", "right"),
+        )
+        return True
+    except Exception as e:
+        import sys
+        print(f"Mnemos: could not pin reranker tokenizer shape ({e}); "
+              "falling back to fastembed's dynamic padding", file=sys.stderr)
+        return False
 
 
 def _get_reranker():
@@ -31,6 +66,7 @@ def _get_reranker():
                 if DISABLE_MEM_ARENA:
                     kwargs["enable_cpu_mem_arena"] = False
                 _instance = TextCrossEncoder(**kwargs)
+                _pin_tokenizer_shape(_instance)
             except ImportError:
                 raise ImportError(
                     "Reranker requires fastembed[rerank]. Install with: "
@@ -59,6 +95,21 @@ def maybe_unload(force=False):
     return False
 
 
+def _clip(text):
+    """Bound a document's contribution to the sequence axis of the tensor.
+
+    Cross-encoder cost is quadratic in sequence length and the arena retains
+    the peak per shape, so the longest memory in a batch sets a permanent
+    floor for the whole process. Truncation is on the SCORING copy only; the
+    stored memory and everything returned to the caller are untouched.
+    CML front-loads the fact, so the head of a memory is the part that decides
+    its rank.
+    """
+    if RERANK_MAX_CHARS <= 0 or len(text) <= RERANK_MAX_CHARS:
+        return text
+    return text[:RERANK_MAX_CHARS]
+
+
 def rerank(query: str, documents: list) -> list:
     """Rerank documents by cross-encoder relevance to query.
 
@@ -69,8 +120,8 @@ def rerank(query: str, documents: list) -> list:
         return []
     try:
         model = _get_reranker()
-        texts = [d.get("text", "") for d in documents]
-        scores = list(model.rerank(query, texts))
+        texts = [_clip(d.get("text", "")) for d in documents]
+        scores = list(model.rerank(query, texts, batch_size=RERANK_BATCH))
     except Exception as e:
         import sys
         print(f"Reranker error: {e}", file=sys.stderr)

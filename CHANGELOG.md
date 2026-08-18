@@ -4,6 +4,24 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.31.0] - 2026-08-18 (bounded tensor shapes; a reaper on every transport)
+
+### Fixed
+- **Unbounded RSS on the shared HTTP server.** Not a leak: the ONNX Runtime CPU arena grows to the high-water mark of the tensor shapes it has served and does not return it while the session lives. Under stdio, process death reset that for free once per session; the v10.27.0 shared server never exits, so it accumulated the union of every shape every attached harness had ever asked for. Measured on two hosts independently, same ceiling: 18.3 GB in the field, 18.28 GB reproducing it here.
+  The free-running axis was **padding**, which is easy to get backwards. Jina v2 caps at 1024 tokens and fastembed truncates there, so sequence length looked bounded. But fastembed calls `enable_padding()` with no length, so every batch pads to its own longest member and one long memory drags the other fifteen up with it: shape wanders through [1, 1024] with batch composition. Pinning truncation AND padding to a single length collapses that to one shape.
+  `MNEMOS_RERANK_MAX_TOKENS` (default 512) pins both on the tokenizer fastembed already built. This is a policy change, not a reimplementation: token ids, special tokens, the XLM-R pair template and `logits[:,0]` post-processing are untouched, so the published benchmark remains a fastembed score stream. It reaches through a private attribute and degrades to a warning plus fastembed's dynamic padding if that moves. 512 rather than 1024 because attention is quadratic in sequence length.
+  `MNEMOS_RERANK_BATCH` (default 16, was fastembed's 64) and `MNEMOS_EMBED_BATCH` (default 32, was 256) bound the batch axis.
+  Measured, same workload, arena deliberately ON, reranking the 150 longest memories: **+15.68 GB claimed before, +0.89 GB after**. The second and larger pool now costs +0.00 GB because the shape is already covered. Total peak 2.73 GB with the arena on, against 2.85 GB with it disabled, so the bound gets arena-on latency at arena-off memory.
+- **The idle reaper never ran on the HTTP transport.** It was started by `mcp_server.main()` only, which is backwards: a stdio harness reclaims everything by exiting, while the shared server never exits. `MNEMOS_MODEL_IDLE_TTL` on a `mnemos serve --http` unit was a no-op from v10.27.0 until now. Moved to `_resource.start_idle_reaper()`, idempotent, called by both transports.
+- **NLI was missing from the reaper entirely.** `nli.py` had no `maybe_unload`, so a quiet night still left both DeBERTa sessions and their arenas resident. On a deployment running `MNEMOS_DEDUP_CONFIRM=nli` and `MNEMOS_CONTRADICT_MODE=nli` that is two of the four ONNX sessions on the process. Added, and wired into the tick.
+
+### Changed
+- `MNEMOS_RERANK_MAX_CHARS` now defaults to 0. Clipping characters is a weak proxy for clipping tokens: measured on this store, 1958 chars is 536 tokens but 3000 chars is 934, so a character budget does not bound a tensor. Superseded by the token pin, kept as an escape hatch.
+
+### Notes
+- 16 tests (`tests/test_v1031_shape_bounds.py`), including a regression test asserting the HTTP transport starts the reaper.
+- `MNEMOS_DISABLE_MEM_ARENA` remains the blunt instrument for hosts that want bounded RSS without any of this, at the measured 14 to 49% latency cost.
+
 ## [10.30.1] - 2026-08-18 (heal a broken fastembed cache before model load)
 
 ### Fixed

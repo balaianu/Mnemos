@@ -4,6 +4,14 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.27.0] - 2026-08-18 (shared HTTP transport: one process, many harnesses)
+
+### Added
+- **Streamable-HTTP transport** (`mnemos serve --http 127.0.0.1:PORT`, `--unix PATH`): a long-lived Mnemos process that any number of MCP harnesses (Claude Code, Codex, Grok, ...) attach to over localhost, so the ONNX models (e5-large, Jina reranker, NLI) load exactly ONCE. Motivation, measured on a 31G host with three stdio-spawned copies: 16.4G + 5.5G private RSS of identical weights plus ORT arena growth; the shared file-backed RSS of the .onnx files was ~12MB, so disk cache sharing does not help. Request/response subset of MCP streamable HTTP: POST body is one JSON-RPC message or a batch, response is `application/json`; notifications get 202; GET is 405 (no server push); `Mcp-Session-Id` issued on initialize and accepted but not required, because tool state is process-global by design. Dispatch is serialized through one process-wide lock so concurrent harnesses queue briefly instead of growing per-session ORT arenas without bound. Binds are refused unless localhost (or a 0600 user-only unix socket); `MNEMOS_HTTP_ALLOW_NONLOCAL=1` overrides explicitly. Model warmup is once-per-process (`initialize` from a second client is a no-op). 11 tests; `docs/shared-http-server.md` documents the systemd user unit and per-harness config rewiring.
+
+### Changed
+- `mcp_server.py`: JSON-RPC dispatch extracted into transport-agnostic `handle_message(mnemos, msg)`; the stdio loop and the HTTP handler both call it. stdio behavior is unchanged (same methods, same error shapes, same stderr logging), and `mnemos-mcp` with no flags remains the default single-client transport.
+
 ## [10.26.2] - 2026-07-25 (audit log survives a pre-v10.2.1 consolidation_log)
 
 ### Fixed

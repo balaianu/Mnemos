@@ -304,6 +304,115 @@ TOOL_DISPATCH = {
 # (EOF, terminate) so one malformed line skips instead of killing the loop.
 SKIP_MSG = object()
 
+# Model warmup must run at most once per process: the stdio transport sees one
+# initialize per lifetime, but the HTTP transport sees one per attached client.
+_WARMUP_DONE = threading.Event()
+
+
+def _maybe_warmup(mnemos):
+    """Eagerly load the models so the first search is instant. Eager by
+    default; set MNEMOS_EAGER_WARMUP=0 on a memory-constrained host to load
+    lazily on first use instead. Idempotent across MCP sessions."""
+    if os.environ.get("MNEMOS_EAGER_WARMUP", "1") != "1":
+        return
+    if _WARMUP_DONE.is_set():
+        return
+    _WARMUP_DONE.set()
+    try:
+        from .embed import embed
+        embed(["warmup"], prefix="query")
+        sys.stderr.write("Mnemos: e5-large model loaded\n")
+        sys.stderr.flush()
+    except Exception as e:
+        sys.stderr.write(f"Mnemos: embedder warmup failed: {e}\n")
+    # Warm up the reranker only if rerank is enabled
+    if mnemos.enable_rerank:
+        try:
+            from .rerank import rerank
+            rerank("warmup", [{"id": 0, "text": "warmup document"}])
+            sys.stderr.write("Mnemos: jina reranker loaded\n")
+            sys.stderr.flush()
+        except Exception as e:
+            sys.stderr.write(f"Mnemos: reranker warmup failed: {e}\n")
+
+
+def handle_message(mnemos, msg):
+    """Transport-agnostic JSON-RPC dispatch.
+
+    Returns the response dict for a request, or None for notifications and
+    id-less messages (nothing to send). Transports own framing and I/O;
+    everything protocol-shaped lives here.
+    """
+    method = msg.get("method", "")
+    id_ = msg.get("id")
+    params = msg.get("params", {})
+
+    if id_ is None:
+        return None
+
+    if method == "initialize":
+        response = {
+            "jsonrpc": "2.0", "id": id_,
+            "result": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "mnemos", "version": __version__},
+            },
+        }
+        _maybe_warmup(mnemos)
+        return response
+
+    if method == "tools/list":
+        return {"jsonrpc": "2.0", "id": id_, "result": {"tools": TOOL_DEFINITIONS}}
+
+    if method == "tools/call":
+        tool_name = params.get("name", "")
+        tool_args = params.get("arguments", {})
+        # Opt-in tool-usage logging: if enabled, record tool_name +
+        # timestamp. No arguments, no content. Useful for health-check
+        # tooling that wants to answer "was the server responsive?"
+        # without parsing MCP transport logs.
+        if DEFAULT_TOOL_USAGE_LOG:
+            try:
+                mnemos.store.log_tool_usage(tool_name)
+            except Exception:
+                pass
+        handler = TOOL_DISPATCH.get(tool_name)
+        if not handler:
+            return {
+                "jsonrpc": "2.0", "id": id_,
+                "result": {
+                    "content": [{"type": "text", "text": json.dumps({"error": f"Unknown tool: {tool_name}"})}],
+                    "isError": True,
+                },
+            }
+        try:
+            result = handler(mnemos, tool_args)
+            return {
+                "jsonrpc": "2.0", "id": id_,
+                "result": {"content": [{"type": "text", "text": json.dumps(result)}]},
+            }
+        except Exception as e:
+            # Full detail to stderr for the operator; the caller gets the
+            # class plus a truncated message (raw str(e) can carry DB
+            # paths and whole schema fragments).
+            import traceback
+            traceback.print_exc(file=sys.stderr)
+            sys.stderr.flush()
+            brief = f"{type(e).__name__}: {str(e)[:300]}"
+            return {
+                "jsonrpc": "2.0", "id": id_,
+                "result": {
+                    "content": [{"type": "text", "text": json.dumps({"error": brief})}],
+                    "isError": True,
+                },
+            }
+
+    return {
+        "jsonrpc": "2.0", "id": id_,
+        "error": {"code": -32601, "message": f"Method not found: {method}"},
+    }
+
 
 def read_msg():
     line = sys.stdin.readline()
@@ -352,94 +461,9 @@ def main():
         if msg is SKIP_MSG:
             continue
 
-        method = msg.get("method", "")
-        id_ = msg.get("id")
-        params = msg.get("params", {})
-
-        if id_ is None:
-            continue
-
-        if method == "initialize":
-            send_msg({
-                "jsonrpc": "2.0", "id": id_,
-                "result": {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "mnemos", "version": __version__},
-                },
-            })
-            # Warm up the models so the first search is instant. Eager by
-            # default (current behaviour); set MNEMOS_EAGER_WARMUP=0 on a
-            # memory-constrained host to load lazily on first use instead.
-            if os.environ.get("MNEMOS_EAGER_WARMUP", "1") == "1":
-                try:
-                    from .embed import embed
-                    embed(["warmup"], prefix="query")
-                    sys.stderr.write("Mnemos: e5-large model loaded\n")
-                    sys.stderr.flush()
-                except Exception as e:
-                    sys.stderr.write(f"Mnemos: embedder warmup failed: {e}\n")
-                # Warm up the reranker only if rerank is enabled
-                if mnemos.enable_rerank:
-                    try:
-                        from .rerank import rerank
-                        rerank("warmup", [{"id": 0, "text": "warmup document"}])
-                        sys.stderr.write("Mnemos: jina reranker loaded\n")
-                        sys.stderr.flush()
-                    except Exception as e:
-                        sys.stderr.write(f"Mnemos: reranker warmup failed: {e}\n")
-
-        elif method == "tools/list":
-            send_msg({"jsonrpc": "2.0", "id": id_, "result": {"tools": TOOL_DEFINITIONS}})
-
-        elif method == "tools/call":
-            tool_name = params.get("name", "")
-            tool_args = params.get("arguments", {})
-            # Opt-in tool-usage logging: if enabled, record tool_name +
-            # timestamp. No arguments, no content. Useful for health-check
-            # tooling that wants to answer "was the server responsive?"
-            # without parsing MCP stdin/stdout logs.
-            if DEFAULT_TOOL_USAGE_LOG:
-                try:
-                    mnemos.store.log_tool_usage(tool_name)
-                except Exception:
-                    pass
-            handler = TOOL_DISPATCH.get(tool_name)
-            if not handler:
-                send_msg({
-                    "jsonrpc": "2.0", "id": id_,
-                    "result": {
-                        "content": [{"type": "text", "text": json.dumps({"error": f"Unknown tool: {tool_name}"})}],
-                        "isError": True,
-                    },
-                })
-                continue
-            try:
-                result = handler(mnemos, tool_args)
-                send_msg({
-                    "jsonrpc": "2.0", "id": id_,
-                    "result": {"content": [{"type": "text", "text": json.dumps(result)}]},
-                })
-            except Exception as e:
-                # Full detail to stderr for the operator; the caller gets the
-                # class plus a truncated message (raw str(e) can carry DB
-                # paths and whole schema fragments).
-                import traceback
-                traceback.print_exc(file=sys.stderr)
-                sys.stderr.flush()
-                brief = f"{type(e).__name__}: {str(e)[:300]}"
-                send_msg({
-                    "jsonrpc": "2.0", "id": id_,
-                    "result": {
-                        "content": [{"type": "text", "text": json.dumps({"error": brief})}],
-                        "isError": True,
-                    },
-                })
-        else:
-            send_msg({
-                "jsonrpc": "2.0", "id": id_,
-                "error": {"code": -32601, "message": f"Method not found: {method}"},
-            })
+        response = handle_message(mnemos, msg)
+        if response is not None:
+            send_msg(response)
 
 
 if __name__ == "__main__":

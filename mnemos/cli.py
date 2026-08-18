@@ -259,6 +259,10 @@ def cmd_ingest(mnemos, args):
 
 
 def cmd_serve(mnemos, args):
+    if getattr(args, "http", None) or getattr(args, "unix", None):
+        from . import http_server
+        http_server.serve(http=args.http, unix=args.unix)
+        return
     from . import mcp_server
     mcp_server.main()
 
@@ -436,7 +440,9 @@ def main(argv=None):
     p.set_defaults(fn=cmd_ingest)
 
     # serve
-    p = sub.add_parser("serve", help="Start MCP server on stdio")
+    p = sub.add_parser("serve", help="Start MCP server (stdio by default; --http/--unix for a shared multi-harness server)")
+    p.add_argument("--http", metavar="HOST:PORT", help="serve streamable HTTP on HOST:PORT (localhost only unless MNEMOS_HTTP_ALLOW_NONLOCAL=1); models load once for all attached harnesses")
+    p.add_argument("--unix", metavar="PATH", help="serve streamable HTTP on a user-only (0600) unix socket")
     p.set_defaults(fn=cmd_serve)
 
     args = parser.parse_args(argv)

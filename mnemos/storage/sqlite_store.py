@@ -223,6 +223,10 @@ class SQLiteStore(MnemosStore):
         # declared) or `id` (when declared as `id INTEGER PRIMARY KEY`).
         # Both schemas exist in the wild; we detect at first use and cache.
         self._vec_join_col: Optional[str] = None
+        # Set once per store, on first connection: what this store's existing
+        # vectors were actually built with.
+        self._embed_adopted = False
+        self._embed_adoption: dict = {}
 
     # --- Connection management ---
 
@@ -243,7 +247,41 @@ class SQLiteStore(MnemosStore):
         self._conn.execute("PRAGMA busy_timeout=5000")
         self._conn.execute("PRAGMA cache_size=-200000")  # 200MB page cache
         self.init_schema()
+        self._adopt_embed_config(self._conn)
         return self._conn
+
+    def _adopt_embed_config(self, conn):
+        """Pin the embedder to whatever this store's vectors were built with.
+
+        A default is a decision about NEW stores. A populated store already
+        answered the question, and its answer is the only one under which its
+        vectors mean anything: mixing 768-dim bge vectors into a 1024-wide
+        e5 index is rejected on insert, and mixing normalized with
+        un-normalized vectors of the same width is worse because nothing
+        rejects it. So an upgrade that moves the default must not move a
+        populated store with it.
+
+        Explicitly exported env vars still win; they are an instruction, and
+        doctor reports the resulting provenance split so it is not silent.
+        """
+        if self._embed_adopted:
+            return
+        self._embed_adopted = True
+        try:
+            row = conn.execute(
+                "SELECT model, COUNT(*) c FROM embed_meta WHERE source_db = ? "
+                "AND model IS NOT NULL GROUP BY model ORDER BY c DESC LIMIT 1",
+                (self.SOURCE_KEY,),
+            ).fetchone()
+            if not row or not row["model"]:
+                return
+            from ..embed import adopt_store_config
+            self._embed_adoption = adopt_store_config(row["model"],
+                                                      self.get_vec_dims())
+        except Exception:
+            # A store too broken to report its own provenance is doctor's
+            # problem, not a reason to refuse to open it.
+            self._embed_adoption = {}
 
     def raw_connection(self):
         return self._get_conn()

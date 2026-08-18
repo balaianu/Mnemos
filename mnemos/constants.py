@@ -107,11 +107,19 @@ NLI_DEDUP_MAX_CANDIDATES = int(os.environ.get("MNEMOS_NLI_DEDUP_MAX_CANDIDATES",
 # while a session stays loaded, so RSS climbs during active periods and the
 # idle reaper never gets a window on a busy host (reported from a 7.3GB
 # system: 700MB -> 4.8GB RSS, OOM + swap; contributed by balaianu/Mnemos).
-# MNEMOS_DISABLE_MEM_ARENA=1 passes enable_cpu_mem_arena=False to every
-# ONNX session Mnemos creates (e5 embedder, Jina reranker, both NLI
-# scorers): each inference allocates from the system and returns it.
-# Trade-off ~10-15% slower inference for bounded RSS. Opt-in, default 0,
-# same contract as MNEMOS_MODEL_IDLE_TTL and MNEMOS_MIN_FREE_MB.
+# MNEMOS_DISABLE_MEM_ARENA passes enable_cpu_mem_arena=False to every ONNX
+# session Mnemos creates (e5 embedder, Jina reranker, both NLI scorers): each
+# inference allocates from the system and returns it.
+# Opt-in, default 0, same contract as MNEMOS_MODEL_IDLE_TTL and
+# MNEMOS_MIN_FREE_MB. Strongly recommended for any long-lived process: the
+# arena is unbounded in practice, not merely large. Measured on one host,
+# same workload: 21.2 GB RSS after ~25 minutes with the arena on and no
+# shrink when idle, against 2.85 GB flat over 3.5 hours with it off. The
+# reported 700MB -> 4.8GB OOM is the same failure on smaller hardware.
+# It is not the default because it is not free: measured at +49% embedding
+# latency (interleaved A/B, 4 paired rounds), far above the 10-15% previously
+# assumed here. Short-lived batch processes that exit before growth matters
+# should leave it off and keep the throughput.
 DISABLE_MEM_ARENA = os.environ.get("MNEMOS_DISABLE_MEM_ARENA", "0") == "1"
 
 # Dedup confirm tier: 'rerank' (legacy cross-encoder / vec fallback) or 'nli'.
@@ -204,6 +212,7 @@ MAX_CLUSTER_SIZE = 8
 
 # --- Embedding model ---
 FASTEMBED_MODEL = os.environ.get("MNEMOS_EMBED_MODEL", "intfloat/multilingual-e5-large")
+EMBED_MODEL_EXPLICIT = "MNEMOS_EMBED_MODEL" in os.environ
 # Dimensionality of FASTEMBED_MODEL. Must match the model: e5-large and
 # bge-large are 1024, bge-base 768, bge-small and MiniLM 384. Changing
 # either this or the model requires a full re-embed. A mismatch does not
@@ -211,6 +220,7 @@ FASTEMBED_MODEL = os.environ.get("MNEMOS_EMBED_MODEL", "intfloat/multilingual-e5
 # dimensions but received 384") and embed() raises first with the value to
 # set, but the store is left without vectors until it is corrected.
 FASTEMBED_DIMS = int(os.environ.get("MNEMOS_EMBED_DIMS", "1024"))
+EMBED_DIMS_EXPLICIT = "MNEMOS_EMBED_DIMS" in os.environ
 # --- CML operator normalization (opt-in) ---
 # CML's relational operators are unicode symbols. SentencePiece vocabularies
 # (e5, Jina reranker: 250k) carry them; English WordPiece vocabularies
@@ -221,9 +231,16 @@ FASTEMBED_DIMS = int(os.environ.get("MNEMOS_EMBED_DIMS", "1024"))
 # With this on, the operators are replaced by the words they stand for BEFORE
 # tokenization, for the EMBEDDER ONLY. Stored content, FTS5, the reranker and
 # what the agent reads back are all untouched. Cost measured at +0.13% tokens.
-# Changing this changes every vector, so it is recorded in embed_meta.model
-# and doctor reports a flip as mixed provenance. Opt-in, default off.
-EMBED_NORMALIZE_CML = os.environ.get("MNEMOS_EMBED_NORMALIZE_CML", "0") == "1"
+# DEFAULT ON since v10.30.0. Safe to default because it only seeds NEW stores:
+# a populated store pins itself to the provenance its vectors were built with
+# (see embed.adopt_store_config), so upgrading does not silently re-interpret
+# an existing index. To migrate an existing store, export
+# MNEMOS_EMBED_NORMALIZE_CML=1 explicitly (an exported value outranks the
+# store) and run `mnemos reembed`. Set it to 0 to disable.
+EMBED_NORMALIZE_CML = os.environ.get("MNEMOS_EMBED_NORMALIZE_CML", "1") == "1"
+# An explicitly set knob is a deliberate instruction and outranks whatever a
+# populated store was built with; an unset one is only a seed for new stores.
+EMBED_NORMALIZE_EXPLICIT = "MNEMOS_EMBED_NORMALIZE_CML" in os.environ
 
 FASTEMBED_CACHE = os.environ.get(
     "MNEMOS_EMBED_CACHE",

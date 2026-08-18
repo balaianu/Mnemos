@@ -26,11 +26,12 @@ def _reload(monkeypatch, enabled):
     return importlib.reload(e)
 
 
-def test_off_by_default(monkeypatch):
+def test_on_by_default(monkeypatch):
+    """Default ON since v10.30.0; safe only because populated stores pin."""
     monkeypatch.delenv("MNEMOS_EMBED_NORMALIZE_CML", raising=False)
     import mnemos.constants as c
     importlib.reload(c)
-    assert c.EMBED_NORMALIZE_CML is False
+    assert c.EMBED_NORMALIZE_CML is True
 
 
 def test_disabled_is_identity(monkeypatch):
@@ -98,3 +99,118 @@ def test_model_id_is_plain_when_off(monkeypatch):
     e = _reload(monkeypatch, False)
     from mnemos.constants import FASTEMBED_MODEL
     assert e.embed_model_id() == FASTEMBED_MODEL
+
+
+# --- per-store pinning (v10.30.0) -----------------------------------------
+
+def _fresh_embed(monkeypatch, **env):
+    """Reload constants+embed under a given env, returning the embed module."""
+    for k in ("MNEMOS_EMBED_MODEL", "MNEMOS_EMBED_DIMS",
+              "MNEMOS_EMBED_NORMALIZE_CML"):
+        monkeypatch.delenv(k, raising=False)
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    import mnemos.constants as c
+    importlib.reload(c)
+    import mnemos.embed as e
+    return importlib.reload(e)
+
+
+def test_adopts_model_dims_and_normalization_from_store(monkeypatch):
+    e = _fresh_embed(monkeypatch)
+    changed = e.adopt_store_config("BAAI/bge-base-en-v1.5+cmlnorm", 768)
+    assert changed["model"][1] == "BAAI/bge-base-en-v1.5"
+    assert changed["dims"][1] == 768
+    # normalize already matches the v10.30.0 default, so it is not a change
+    assert "normalize" not in changed
+    assert e.effective_model() == "BAAI/bge-base-en-v1.5"
+    assert e.effective_dims() == 768
+    assert e.effective_normalize() is True
+
+
+def test_plain_model_id_adopts_without_normalization(monkeypatch):
+    e = _fresh_embed(monkeypatch)
+    e.adopt_store_config("BAAI/bge-small-en-v1.5", 384)
+    assert e.effective_normalize() is False
+    assert e.embed_model_id() == "BAAI/bge-small-en-v1.5"
+
+
+def test_explicit_env_outranks_the_store(monkeypatch):
+    """An exported knob is an instruction; a default is only a seed."""
+    e = _fresh_embed(monkeypatch, MNEMOS_EMBED_MODEL="BAAI/bge-small-en-v1.5",
+                     MNEMOS_EMBED_DIMS="384",
+                     MNEMOS_EMBED_NORMALIZE_CML="1")
+    changed = e.adopt_store_config("intfloat/multilingual-e5-large", 1024)
+    assert changed == {}
+    assert e.effective_model() == "BAAI/bge-small-en-v1.5"
+    assert e.effective_dims() == 384
+    assert e.effective_normalize() is True
+
+
+def test_partial_explicit_only_pins_the_rest(monkeypatch):
+    e = _fresh_embed(monkeypatch, MNEMOS_EMBED_MODEL="BAAI/bge-large-en-v1.5")
+    changed = e.adopt_store_config("BAAI/bge-base-en-v1.5", 768)
+    assert "model" not in changed        # explicitly set, untouched
+    assert changed["dims"][1] == 768     # not set, adopted from the store
+    assert e.effective_model() == "BAAI/bge-large-en-v1.5"
+    assert e.effective_dims() == 768
+
+
+def test_matching_config_reports_no_change(monkeypatch):
+    e = _fresh_embed(monkeypatch)
+    # Must match on all three, including the +cmlnorm suffix, since
+    # normalization is on by default from v10.30.0.
+    assert e.adopt_store_config(
+        "intfloat/multilingual-e5-large+cmlnorm", 1024) == {}
+
+
+def test_empty_model_id_is_ignored(monkeypatch):
+    e = _fresh_embed(monkeypatch)
+    assert e.adopt_store_config(None, 1024) == {}
+    assert e.adopt_store_config("", 1024) == {}
+
+
+def test_populated_store_pins_a_moved_default(monkeypatch, tmp_path):
+    """The upgrade case: default moved, store did not."""
+    e = _fresh_embed(monkeypatch)
+    from mnemos.storage.sqlite_store import SQLiteStore
+    store = SQLiteStore(db_path=str(tmp_path / "m.db"), namespace="t")
+    conn = store._get_conn()
+    conn.execute("INSERT INTO embed_meta (source_db, source_id, text_hash, model) "
+                 "VALUES ('memory', 1, 'h', 'BAAI/bge-base-en-v1.5+cmlnorm')")
+    conn.commit()
+    store2 = SQLiteStore(db_path=str(tmp_path / "m.db"), namespace="t")
+    store2._get_conn()
+    assert store2._embed_adoption["model"][1] == "BAAI/bge-base-en-v1.5"
+    assert e.effective_normalize() is True
+
+
+def test_empty_store_does_not_pin_anything(monkeypatch, tmp_path):
+    e = _fresh_embed(monkeypatch)
+    from mnemos.storage.sqlite_store import SQLiteStore
+    store = SQLiteStore(db_path=str(tmp_path / "empty.db"), namespace="t")
+    store._get_conn()
+    assert store._embed_adoption == {}
+    assert e.effective_model() == "intfloat/multilingual-e5-large"
+
+
+def test_existing_unnormalized_store_survives_the_new_default(monkeypatch, tmp_path):
+    """The upgrade case for v10.30.0.
+
+    Someone on 10.29 has a store full of un-normalized vectors. They upgrade,
+    the default flips on, and nothing in their store may change meaning: the
+    provenance recorded on those vectors carries no +cmlnorm suffix, so the
+    store pins normalization back off for itself.
+    """
+    e = _fresh_embed(monkeypatch)
+    assert e.effective_normalize() is True          # the new default
+    from mnemos.storage.sqlite_store import SQLiteStore
+    store = SQLiteStore(db_path=str(tmp_path / "legacy.db"), namespace="t")
+    conn = store._get_conn()
+    conn.execute("INSERT INTO embed_meta (source_db, source_id, text_hash, model) "
+                 "VALUES ('memory', 1, 'h', 'intfloat/multilingual-e5-large')")
+    conn.commit()
+    reopened = SQLiteStore(db_path=str(tmp_path / "legacy.db"), namespace="t")
+    reopened._get_conn()
+    assert reopened._embed_adoption["normalize"] == (True, False)
+    assert e.effective_normalize() is False

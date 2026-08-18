@@ -1673,16 +1673,17 @@ class Mnemos:
         # comparison is silently meaningless. NULL model rows predate
         # provenance tracking and are reported as a check, not an issue.
         try:
-            from .constants import FASTEMBED_MODEL
+            from .embed import embed_model_id
+            current = embed_model_id()
             rows = self.store.get_vector_provenance()
             foreign = [(r["model"], r["count"]) for r in rows
-                       if r["model"] and r["model"] != FASTEMBED_MODEL]
+                       if r["model"] and r["model"] != current]
             untracked = sum(r["count"] for r in rows if not r["model"])
             if foreign:
                 report["issues"].append(
                     "Mixed vector provenance: "
                     + ", ".join(f"{n} vectors from '{m}'" for m, n in foreign)
-                    + f" alongside current model '{FASTEMBED_MODEL}'. "
+                    + f" alongside current model '{current}'. "
                     "Same-index vectors from different models make KNN "
                     "results meaningless; rebuild with `mnemos reembed` "
                     "(embed-fill only covers rows that have no vector at all)."
@@ -1696,6 +1697,23 @@ class Mnemos:
                 report["checks"].append("Vector provenance: consistent")
         except Exception as e:
             report["issues"].append(f"Provenance check failed: {e}")
+
+        # --- Store-pinned embedder ---
+        # Adoption is deliberately quiet at runtime but must be visible here,
+        # otherwise "why is this store not using the model I configured" has
+        # no answer anywhere.
+        try:
+            adopted = getattr(self.store, "_embed_adoption", None) or {}
+            if adopted:
+                report["checks"].append(
+                    "Embedder pinned to this store's existing vectors: "
+                    + ", ".join(f"{k} {old} -> {new}"
+                                for k, (old, new) in adopted.items())
+                    + ". Run `mnemos reembed` to migrate the store to the "
+                      "configured default instead."
+                )
+        except Exception as e:
+            report["issues"].append(f"Embedder pinning check failed: {e}")
 
         # --- Vector dimensions ---
         # The index width is fixed at creation. If the configured model no

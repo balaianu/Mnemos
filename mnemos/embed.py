@@ -14,7 +14,8 @@ import time
 
 from .constants import (
     FASTEMBED_MODEL, FASTEMBED_CACHE, FASTEMBED_DIMS, DISABLE_MEM_ARENA,
-    EMBED_NORMALIZE_CML,
+    EMBED_NORMALIZE_CML, EMBED_MODEL_EXPLICIT, EMBED_DIMS_EXPLICIT,
+    EMBED_NORMALIZE_EXPLICIT,
 )
 from . import _resource
 
@@ -32,7 +33,7 @@ def _get_model():
             _resource.guard_memory()
             from fastembed import TextEmbedding
             kwargs = {
-                "model_name": FASTEMBED_MODEL,
+                "model_name": effective_model(),
                 "cache_dir": FASTEMBED_CACHE,
             }
             if DISABLE_MEM_ARENA:
@@ -86,7 +87,7 @@ def normalize_cml(text):
     way to the encoder, documents and queries alike, so both sides of the index
     are built from the same distribution.
     """
-    if not EMBED_NORMALIZE_CML or not text:
+    if not effective_normalize() or not text:
         return text
     for sym, word in CML_EMBED_MAP.items():
         if sym in text:
@@ -101,7 +102,69 @@ def embed_model_id():
     has to be part of the identity or doctor's provenance check cannot see a
     flip and the store silently mixes two geometries.
     """
-    return FASTEMBED_MODEL + ("+cmlnorm" if EMBED_NORMALIZE_CML else "")
+    return effective_model() + ("+cmlnorm" if effective_normalize() else "")
+
+
+# Effective embedder config. The env vars seed it; a populated store can pin it
+# to whatever it was actually built with (see adopt_store_config). A store's
+# vectors are only comparable to vectors from the same model, dimensions and
+# normalization setting, so the store's own history outranks a default that
+# happens to be current. An explicitly exported env var still wins: that is a
+# deliberate instruction, and the operator is told to re-embed.
+_effective = {
+    "model": FASTEMBED_MODEL,
+    "dims": FASTEMBED_DIMS,
+    "normalize": EMBED_NORMALIZE_CML,
+}
+
+
+def effective_model():
+    return _effective["model"]
+
+
+def effective_dims():
+    return _effective["dims"]
+
+
+def effective_normalize():
+    return _effective["normalize"]
+
+
+def adopt_store_config(model_id, dims=None):
+    """Pin the embedder to what a populated store was built with.
+
+    `model_id` is an embed_meta.model value, so it may carry the "+cmlnorm"
+    suffix. `dims` comes from the declared width of the vector index, which is
+    authoritative and needs no model catalogue lookup.
+
+    Fields the operator set explicitly are left alone. Returns a dict of what
+    actually changed, empty when nothing did, so callers can surface it rather
+    than silently reconfiguring under the user.
+    """
+    global _instance, _dims_checked
+    if not model_id:
+        return {}
+    normalize = model_id.endswith("+cmlnorm")
+    model = model_id[: -len("+cmlnorm")] if normalize else model_id
+
+    changed = {}
+    if not EMBED_MODEL_EXPLICIT and model != _effective["model"]:
+        changed["model"] = (_effective["model"], model)
+        _effective["model"] = model
+    if not EMBED_NORMALIZE_EXPLICIT and normalize != _effective["normalize"]:
+        changed["normalize"] = (_effective["normalize"], normalize)
+        _effective["normalize"] = normalize
+    if dims and not EMBED_DIMS_EXPLICIT and dims != _effective["dims"]:
+        changed["dims"] = (_effective["dims"], dims)
+        _effective["dims"] = dims
+
+    if changed:
+        # The loaded session belongs to the old config; drop it so the next
+        # embed() builds under the adopted one.
+        with _lock:
+            _instance = None
+        _dims_checked = False
+    return changed
 
 
 def _prefixes():
@@ -113,7 +176,7 @@ def _prefixes():
     query. Unknown models get no prefix, because a wrong prefix is worse than
     none.
     """
-    m = FASTEMBED_MODEL.lower()
+    m = effective_model().lower()
     if "e5" in m:
         return "passage: ", "query: "
     if "bge" in m and "-en" in m:
@@ -136,10 +199,11 @@ def _check_dims(actual):
     if _dims_checked:
         return
     _dims_checked = True
-    if actual != FASTEMBED_DIMS:
+    if actual != effective_dims():
         raise ValueError(
-            f"embedding dimension mismatch: {FASTEMBED_MODEL} produces "
-            f"{actual}-dim vectors but MNEMOS_EMBED_DIMS is {FASTEMBED_DIMS}. "
+            f"embedding dimension mismatch: {effective_model()} produces "
+            f"{actual}-dim vectors but the configured width is "
+            f"{effective_dims()}. "
             f"Set MNEMOS_EMBED_DIMS={actual} and re-embed the store "
             f"(drop embed_vec, then `mnemos embed-fill`)."
         )

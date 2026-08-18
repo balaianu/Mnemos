@@ -600,7 +600,7 @@ class TestM2EmbedFill:
 
 class TestM1ModelProvenance:
     def test_store_embedding_records_model(self, tmp_path):
-        from mnemos.constants import FASTEMBED_MODEL
+        from mnemos.embed import embed_model_id
         store = _store(tmp_path)
         mid = store.store_memory(
             Memory(namespace="t", project="dev", content="model tracked"),
@@ -609,10 +609,10 @@ class TestM1ModelProvenance:
         row = store._get_conn().execute(
             "SELECT model FROM embed_meta WHERE source_id=?", (mid,)
         ).fetchone()
-        assert row["model"] == FASTEMBED_MODEL
+        assert row["model"] == embed_model_id()
 
     def test_archive_move_preserves_model(self, tmp_path):
-        from mnemos.constants import FASTEMBED_MODEL
+        from mnemos.embed import embed_model_id
         store = _store(tmp_path)
         mid = store.store_memory(
             Memory(namespace="t", project="dev", content="model travels"),
@@ -622,7 +622,7 @@ class TestM1ModelProvenance:
         row = store._get_conn().execute(
             "SELECT model FROM embed_meta_arch WHERE source_id=?", (mid,)
         ).fetchone()
-        assert row["model"] == FASTEMBED_MODEL
+        assert row["model"] == embed_model_id()
 
     def test_doctor_flags_foreign_model_vectors(self, tmp_path):
         m = _mnemos(tmp_path)

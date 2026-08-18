@@ -4,6 +4,19 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.30.0] - 2026-08-18 (per-store embedder pinning; CML normalization on by default)
+
+### Added
+- **Per-store embedder pinning**: on first connection a populated store reads back the model, dimensions and normalization its vectors were actually built with (`embed_meta.model`, plus the declared width of `embed_vec`) and pins the embedder to them. A default is a decision about NEW stores; a populated store already answered the question, and its answer is the only configuration under which its vectors mean anything. Without this, moving a default would break every existing store on upgrade: 768-dim vectors into a 1024-wide index are rejected on insert, so the store silently stops gaining vectors while the old ones keep answering queries and only newly-stored memories go missing from search.
+  An explicitly exported `MNEMOS_EMBED_MODEL` / `MNEMOS_EMBED_DIMS` / `MNEMOS_EMBED_NORMALIZE_CML` still wins, per field: an exported value is an instruction, an unset one is only a seed. `doctor` reports any pinning that occurred, so "why is this store not using the model I configured" has an answer. To migrate a store to a new default, export the value explicitly and run `mnemos reembed`.
+- `embed.adopt_store_config()`, `effective_model()`, `effective_dims()`, `effective_normalize()`.
+
+### Changed
+- **`MNEMOS_EMBED_NORMALIZE_CML` now defaults on.** It is the only change in this series with no trade-off: measured cost is +0.13% tokens, it is a no-op for e5 (0 UNK before and after), and it removes 81% of the `[UNK]` tokens any English WordPiece vocabulary produces on CML. Defaulting it is safe only because of the pinning above, which keeps existing stores on the configuration they were built with.
+
+### Fixed
+- `MNEMOS_DISABLE_MEM_ARENA` stays default-off, and the code comment's "~10-15% slower inference" is corrected. Interleaved A/B over four paired rounds measured **+49% embedding latency** with the arena disabled (median 88.5s vs 59.3s). The RSS case for enabling it is strong (21.2 GB after ~25 minutes versus 2.85 GB flat over 3.5 hours, same host and workload) but it is a real trade, not a free win, and long-lived deployments should opt in deliberately.
+
 ## [10.29.0] - 2026-08-18 (CML operator normalization for the embedder)
 
 ### Added

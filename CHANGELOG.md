@@ -4,6 +4,21 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.28.0] - 2026-08-18 (configurable embedder; vector-index rebuild)
+
+### Added
+- **`mnemos reembed`**: rebuilds the entire active vector index under the currently configured model and dimensions. `embed-fill` only covers rows with NO vector, so it could never repair a model or dimension change, which is exactly when every row already has a vector from the wrong encoder. Takes a `VACUUM INTO` snapshot first (skip with `--no-backup`), reads the existing vec0 DDL and substitutes only the width so a store declaring `id INTEGER PRIMARY KEY` keeps that shape, then batch re-embeds every active memory. `--dry-run` reports the target model, previous width and row count without touching the index. The tier-2 archived index is untouched; it has its own `reindex-archived`.
+- **`doctor` vector-dimension check**: compares the declared width of `embed_vec` (read from `sqlite_master`, since vec0 exposes no introspection pragma) against `FASTEMBED_DIMS` and reports a mismatch with both remedies, rebuild or revert. The failure this catches is quiet rather than loud: sqlite-vec rejects every mismatched insert, so the store stops gaining vectors while the existing ones keep answering queries, and search degrades only for anything stored after the change.
+- `SQLiteStore.get_vec_dims()` and `SQLiteStore.reset_vec_index(dims)`.
+- 16 tests (`tests/test_v1028_embed_config.py`).
+
+### Fixed
+- **`MNEMOS_EMBED_DIMS` now exists.** `docs/features.md` has documented it as the knob for running a different-dimensional embedder for several releases, while `constants.py` hardcoded `FASTEMBED_DIMS = 1024`. Following the documentation had no effect. It is now `int(os.environ.get("MNEMOS_EMBED_DIMS", "1024"))`, unchanged by default.
+- **Embedding prefixes follow the model family.** `embed()` hardcoded e5's `"passage: "` / `"query: "` scheme, so switching `MNEMOS_EMBED_MODEL` to a BGE model glued a meaningless prefix onto every document and every query, on both sides of the index, with no error. `_prefixes()` now resolves the pair per family (e5, BGE English v1.5, and no prefix for anything unrecognized, because a wrong prefix is worse than none). The e5 default path is byte-identical: stored-vs-recomputed cosine on an existing 719-memory store is 1.0000.
+- **Dimension mismatches name the knob.** sqlite-vec already rejects a mismatched insert, but its message reports the numbers without saying which setting produced them. `embed()` now raises once, up front, with the value to set and the command to run.
+- `doctor`'s mixed-provenance issue pointed at `mnemos embed-fill`, which cannot repair the condition it was detecting. It now points at `mnemos reembed`.
+- Comment on `HYBRID_MIN_MEMORIES` said vector search activates "above this count"; the test is `>=`, so it activates at exactly 10.
+
 ## [10.27.0] - 2026-08-18 (shared HTTP transport: one process, many harnesses)
 
 ### Added

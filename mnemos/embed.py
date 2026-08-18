@@ -1,9 +1,10 @@
 """
 FastEmbed wrapper for Mnemos.
 
-Uses multilingual-e5-large (1024-dim) ONNX model. Loads once at startup,
-~7ms per embedding on CPU. The e5 model uses prefix tokens to distinguish
-between document passages and search queries; we handle this transparently.
+Uses the FASTEMBED_MODEL ONNX model (default multilingual-e5-large, 1024-dim).
+Loads once at startup, ~7ms per embedding on CPU. Embedding families differ in
+how they mark documents versus queries; _prefixes() resolves that per model so
+callers keep passing a plain "passage" / "query" role.
 """
 
 import hashlib
@@ -58,18 +59,60 @@ def maybe_unload(force=False):
     return False
 
 
+def _prefixes():
+    """(document, query) prefix pair for the configured embedder.
+
+    Each family has its own convention and applying the wrong one silently
+    degrades every vector on both sides of the index. e5 wants "passage: " /
+    "query: "; BGE English v1.5 wants a bare passage and an instruction-led
+    query. Unknown models get no prefix, because a wrong prefix is worse than
+    none.
+    """
+    m = FASTEMBED_MODEL.lower()
+    if "e5" in m:
+        return "passage: ", "query: "
+    if "bge" in m and "-en" in m:
+        return "", "Represent this sentence for searching relevant passages: "
+    return "", ""
+
+
+_dims_checked = False
+
+
+def _check_dims(actual):
+    """Fail loudly, once, when the model and MNEMOS_EMBED_DIMS disagree.
+
+    sqlite-vec already rejects a mismatched insert, but its message names the
+    numbers without naming the knob. Switching MNEMOS_EMBED_MODEL and
+    forgetting MNEMOS_EMBED_DIMS is the obvious way to get here, so say which
+    value to set rather than leaving the caller to infer it.
+    """
+    global _dims_checked
+    if _dims_checked:
+        return
+    _dims_checked = True
+    if actual != FASTEMBED_DIMS:
+        raise ValueError(
+            f"embedding dimension mismatch: {FASTEMBED_MODEL} produces "
+            f"{actual}-dim vectors but MNEMOS_EMBED_DIMS is {FASTEMBED_DIMS}. "
+            f"Set MNEMOS_EMBED_DIMS={actual} and re-embed the store "
+            f"(drop embed_vec, then `mnemos embed-fill`)."
+        )
+
+
 def embed(texts, prefix="passage"):
     """Embed a list of texts. prefix is 'passage' for docs, 'query' for queries.
 
-    Returns a list of lists of floats (1024-dim, L2-normalized).
+    Returns a list of lists of floats (FASTEMBED_DIMS-dim, L2-normalized).
     Returns empty list on failure.
     """
     if not texts:
         return []
     if isinstance(texts, str):
         texts = [texts]
-    # e5 expects "passage: " or "query: " prefix
-    prefixed = [f"{prefix}: {t}" for t in texts]
+    doc_pfx, qry_pfx = _prefixes()
+    pfx = qry_pfx if prefix == "query" else doc_pfx
+    prefixed = [f"{pfx}{t}" for t in texts]
     try:
         import math
         model = _get_model()
@@ -85,11 +128,13 @@ def embed(texts, prefix="passage"):
             if norm > 0:
                 v = [x / norm for x in v]
             out.append(v)
-        return out
     except Exception as e:
         import sys
         print(f"FastEmbed error: {e}", file=sys.stderr)
         return []
+    if out:
+        _check_dims(len(out[0]))
+    return out
 
 
 def text_hash(text: str) -> str:

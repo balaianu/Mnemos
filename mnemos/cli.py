@@ -156,6 +156,13 @@ def cmd_embed_fill(mnemos, args):
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
 
+def cmd_reembed(mnemos, args):
+    result = mnemos.reembed(batch_size=args.batch_size,
+                            backup=not args.no_backup,
+                            dry_run=args.dry_run)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+
+
 def cmd_remediate_oversized(mnemos, args):
     result = mnemos.remediate_oversized(
         min_size=args.min_size, max_size=args.max_size,
@@ -378,6 +385,17 @@ def main(argv=None):
     p.add_argument("--dry-run", action="store_true",
                    help="Report how many are missing without embedding anything")
     p.set_defaults(fn=cmd_embed_fill)
+
+    # reembed
+    p = sub.add_parser("reembed",
+                       help="Rebuild the whole active vector index under the current model/dims "
+                            "(use after switching MNEMOS_EMBED_MODEL; embed-fill cannot do this)")
+    p.add_argument("--batch-size", type=int, default=64, help="Memories per embedding batch")
+    p.add_argument("--no-backup", action="store_true",
+                   help="Skip the pre-rebuild snapshot (not recommended)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="Report what would be rebuilt without touching the index")
+    p.set_defaults(fn=cmd_reembed)
 
     # remediate-oversized
     p = sub.add_parser("remediate-oversized",

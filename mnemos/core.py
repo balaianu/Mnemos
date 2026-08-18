@@ -1521,6 +1521,64 @@ class Mnemos:
         return {"missing": len(rows), "filled": filled, "failed": failed,
                 "dry_run": dry_run}
 
+    def reembed(self, batch_size: int = 64, backup: bool = True,
+                dry_run: bool = False) -> dict:
+        """Rebuild the entire active vector index under the current model.
+
+        embed-fill only covers rows with NO vector, so it cannot repair a model
+        or dimension change: the existing vectors are present, just produced by
+        a different encoder. That is the case this exists for. The vec0 table is
+        recreated at the configured width and every active memory is re-embedded.
+
+        Search degrades to FTS-only between the drop and the refill, so this
+        takes a backup first unless explicitly told not to.
+        """
+        if not self.store.supports_maintenance:
+            return {"error": "reembed requires a SQLite-based store"}
+        from .constants import FASTEMBED_MODEL, FASTEMBED_DIMS
+
+        current = self.store.get_vec_dims()
+        result = {"model": FASTEMBED_MODEL, "target_dims": FASTEMBED_DIMS,
+                  "previous_dims": current, "dry_run": dry_run}
+        if dry_run:
+            result["would_reembed"] = self.store.count_active(self.namespace)
+            return result
+
+        if backup:
+            import time
+            dest = f"{self.store.db_path}.pre-reembed-{time.strftime('%Y%m%d-%H%M%S')}"
+            result["backup"] = self.store.backup(dest)
+
+        self.store.reset_vec_index(FASTEMBED_DIMS)
+
+        filled = failed = 0
+        while True:
+            rows = self.store.get_unembedded_memories(
+                self.namespace, limit=batch_size)
+            if not rows:
+                break
+            texts = [
+                prep_memory_text(r["project"], r["content"], r["tags"] or "",
+                                 mem_type=r["type"] or "", layer=r["layer"] or "")
+                for r in rows
+            ]
+            vecs = embed(texts, prefix="passage")
+            batch_ok = 0
+            for r, text, vec in zip(rows, texts, vecs or []):
+                if vec:
+                    self.store._store_embedding(
+                        r["id"], vec, text_hash=embed_text_hash(text))
+                    batch_ok += 1
+            filled += batch_ok
+            failed += len(rows) - batch_ok
+            # A batch that stores nothing would be handed back identically on
+            # the next pass, so stop rather than spin.
+            if batch_ok == 0:
+                break
+
+        result.update({"reembedded": filled, "failed": failed})
+        return result
+
     def embed_status(self) -> dict:
         """Embedding coverage report."""
         if not self.store.supports_maintenance:
@@ -1626,7 +1684,8 @@ class Mnemos:
                     + ", ".join(f"{n} vectors from '{m}'" for m, n in foreign)
                     + f" alongside current model '{FASTEMBED_MODEL}'. "
                     "Same-index vectors from different models make KNN "
-                    "results meaningless; re-embed with `mnemos embed-fill`."
+                    "results meaningless; rebuild with `mnemos reembed` "
+                    "(embed-fill only covers rows that have no vector at all)."
                 )
             elif untracked:
                 report["checks"].append(
@@ -1637,6 +1696,30 @@ class Mnemos:
                 report["checks"].append("Vector provenance: consistent")
         except Exception as e:
             report["issues"].append(f"Provenance check failed: {e}")
+
+        # --- Vector dimensions ---
+        # The index width is fixed at creation. If the configured model no
+        # longer matches it, every insert is rejected and the store quietly
+        # stops gaining vectors while old ones still answer queries.
+        try:
+            from .constants import FASTEMBED_DIMS, FASTEMBED_MODEL
+            stored_dims = self.store.get_vec_dims()
+            if stored_dims is None:
+                report["checks"].append("Vector index: not created yet")
+            elif stored_dims != FASTEMBED_DIMS:
+                report["issues"].append(
+                    f"Vector dimension mismatch: embed_vec is {stored_dims}-wide "
+                    f"but {FASTEMBED_MODEL} is configured for {FASTEMBED_DIMS}. "
+                    "New vectors are being rejected on insert. Run "
+                    "`mnemos reembed` to rebuild the index at the configured "
+                    "width, or set MNEMOS_EMBED_DIMS back to "
+                    f"{stored_dims} to keep the existing one."
+                )
+            else:
+                report["checks"].append(
+                    f"Vector dimensions: {stored_dims} (matches {FASTEMBED_MODEL})")
+        except Exception as e:
+            report["issues"].append(f"Dimension check failed: {e}")
 
         # --- Archive-side embedding lifecycle (v10.24.0) ---
         # The 2026-07-07 forensic audit found three archive-side drifts the

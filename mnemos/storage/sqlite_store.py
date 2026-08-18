@@ -256,6 +256,49 @@ class SQLiteStore(MnemosStore):
                 pass
             self._conn = None
 
+    def get_vec_dims(self) -> Optional[int]:
+        """Width the embed_vec table was declared with, or None if absent.
+
+        Read from the stored DDL rather than a probe insert: vec0 exposes no
+        introspection pragma, and the declared width is what every insert is
+        validated against.
+        """
+        import re
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE name = 'embed_vec'").fetchone()
+        if not row or not row["sql"]:
+            return None
+        m = re.search(r"float\[(\d+)\]", row["sql"])
+        return int(m.group(1)) if m else None
+
+    def reset_vec_index(self, dims: int):
+        """Drop and recreate embed_vec at `dims`, clearing active vector meta.
+
+        The old DDL is reused with only the width substituted, so a store whose
+        vec0 table declares an explicit `id INTEGER PRIMARY KEY` keeps that
+        shape and _get_vec_join_col stays correct across the rebuild. Archived
+        vectors (embed_vec_arch) are untouched; they carry their own index and
+        their own re-index command.
+
+        Caller is responsible for re-embedding: this leaves the store with zero
+        active vectors, which degrades search to FTS until it is refilled.
+        """
+        import re
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE name = 'embed_vec'").fetchone()
+        if row and row["sql"]:
+            ddl = re.sub(r"float\[\d+\]", f"float[{dims}]", row["sql"])
+        else:
+            ddl = ("CREATE VIRTUAL TABLE embed_vec USING vec0("
+                   f"embedding float[{dims}])")
+        conn.execute("DROP TABLE IF EXISTS embed_vec")
+        conn.execute(ddl)
+        conn.execute("DELETE FROM embed_meta WHERE source_db = 'memory'")
+        conn.commit()
+        self._vec_join_col = None
+
     def backup(self, dest_path: str) -> str:
         """Write a WAL-safe, consistent standalone snapshot of the DB.
 

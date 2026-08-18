@@ -15,7 +15,7 @@ DECAY_RATE_SEMANTIC = 0.00385  # ln(2)/180 ≈ 0.00385
 DECAY_FLOOR = 0.1  # old memories never drop below 10% boost
 
 # --- Search behavior ---
-HYBRID_MIN_MEMORIES = 10  # activate vector search above this count
+HYBRID_MIN_MEMORIES = 10  # vector search joins FTS at this count of active memories
 RRF_K = 60  # Reciprocal Rank Fusion constant
 
 # --- BM25 FTS weights (content, project, tags) ---
@@ -204,7 +204,13 @@ MAX_CLUSTER_SIZE = 8
 
 # --- Embedding model ---
 FASTEMBED_MODEL = os.environ.get("MNEMOS_EMBED_MODEL", "intfloat/multilingual-e5-large")
-FASTEMBED_DIMS = 1024
+# Dimensionality of FASTEMBED_MODEL. Must match the model: e5-large and
+# bge-large are 1024, bge-base 768, bge-small and MiniLM 384. Changing
+# either this or the model requires a full re-embed. A mismatch does not
+# corrupt anything silently: sqlite-vec rejects the insert ("Expected 1024
+# dimensions but received 384") and embed() raises first with the value to
+# set, but the store is left without vectors until it is corrected.
+FASTEMBED_DIMS = int(os.environ.get("MNEMOS_EMBED_DIMS", "1024"))
 FASTEMBED_CACHE = os.environ.get(
     "MNEMOS_EMBED_CACHE",
     os.path.expanduser("~/.cache/fastembed")

@@ -4,6 +4,13 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.30.1] - 2026-08-18 (heal a broken fastembed cache before model load)
+
+### Fixed
+- **Orphaned download artifacts no longer wedge the embedder permanently** (contributed by balaianu). `huggingface_hub` leaves `.incomplete` temp files behind when a download is interrupted and never collects them, and a failed initial download can leave `refs/main` empty, which makes `snapshot_download(local_files_only=True)` return the `snapshots/` parent instead of the hash subdir so onnxruntime fails with NoSuchFile. Both states block the model from ever loading, and they compound: every failed retry adds another dead partial, filling the disk and making the next attempt fail sooner. Reported from the field at 13 GB of orphaned partials across 80 failed downloads of the same 2.2 GB blob.
+  `_clean_broken_cache()` now runs before the encoder is constructed. It removes `.incomplete` files older than an hour, which leaves an active download alone since its mtime stays fresh, and deletes empty `refs/main` files only, never the model dir, so already-downloaded files survive and `snapshot_download` raises `LocalEntryNotFoundError` which fastembed already handles by falling through to a network re-download. Per-file errors are swallowed, so healing can never itself prevent a model load. 9 tests.
+  Note for anyone hitting this: repeated mid-download deaths usually mean the process is being killed, so it is worth checking `MNEMOS_DISABLE_MEM_ARENA` and `MNEMOS_MIN_FREE_MB` as well. This change cleans up the wreckage; those settings address why the downloads died.
+
 ## [10.30.0] - 2026-08-18 (per-store embedder pinning; CML normalization on by default)
 
 ### Added

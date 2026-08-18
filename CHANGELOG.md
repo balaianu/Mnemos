@@ -4,6 +4,16 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.29.0] - 2026-08-18 (CML operator normalization for the embedder)
+
+### Added
+- **`MNEMOS_EMBED_NORMALIZE_CML`** (opt-in, default off): substitutes CML's relational operators for the words they stand for before tokenization, for the embedder only. Stored content, the FTS5 index, the cross-encoder and what the agent reads back are all untouched, so CML's token savings are kept where they are paid, in context reinjection.
+  The defect it addresses is a vocabulary one, not a model-quality one. SentencePiece vocabularies (e5-large and the Jina reranker, 250k) carry the operators; English WordPiece vocabularies (bge, gte, mxbai, nomic, all-MiniLM, 30522) carry none of them and map every one to a single shared `[UNK]`. Measured on a 720-memory production store: 901 UNK tokens under bge, 0 under e5. Because `[UNK]` has one embedding, `D: migration ✓ confirmed` and `W: migration ✗ rejected` contribute the same vector at those positions, so the two become indistinguishable to the bi-encoder. That is a precision failure rather than a recall one, which is the shape the published CML ablation already shows: R@5 moves 98.30% to 98.09% while R@1 on `single-session-preference` falls to 53.33%.
+  Mapped: `∵`, `∴`, `△`, `⚠`, `✓`, `✗`, plus `⟪`/`⟫` snippet markers and `═` separators (dropped). Operators an English vocabulary already carries (`→ ↔ ← @ ~ ∅ >`) are deliberately left alone. Measured cost on the same store: UNK 901 to 170, tokens +0.13%; e5 is unaffected (0 to 0 UNK, +0.05% tokens). The residual UNKs are emoji and Thai from verbatim quotes, not CML.
+  This is what makes the whole 30522-vocab model tier usable at all, not a bge-specific workaround.
+- `embed_model_id()`: provenance string recorded in `embed_meta.model`, suffixed `+cmlnorm` when normalization is on. Normalization changes every vector without changing the model name, so it has to be part of the identity or `doctor`'s provenance check cannot see a flip and the store silently mixes two geometries. `_store_archived_embedding` resolves its `model` at call time for the same reason.
+- 15 tests (`tests/test_v1029_cml_normalize.py`).
+
 ## [10.28.0] - 2026-08-18 (configurable embedder; vector-index rebuild)
 
 ### Added

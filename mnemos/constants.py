@@ -211,6 +211,20 @@ FASTEMBED_MODEL = os.environ.get("MNEMOS_EMBED_MODEL", "intfloat/multilingual-e5
 # dimensions but received 384") and embed() raises first with the value to
 # set, but the store is left without vectors until it is corrected.
 FASTEMBED_DIMS = int(os.environ.get("MNEMOS_EMBED_DIMS", "1024"))
+# --- CML operator normalization (opt-in) ---
+# CML's relational operators are unicode symbols. SentencePiece vocabularies
+# (e5, Jina reranker: 250k) carry them; English WordPiece vocabularies
+# (bge/gte/mxbai/nomic/MiniLM: 30522) do not, and map ALL of them to a single
+# shared [UNK]. Measured on a 720-memory production store: 901 UNK tokens, and
+# because [UNK] has one embedding, "migration confirmed" and "migration
+# rejected" become the same vector.
+# With this on, the operators are replaced by the words they stand for BEFORE
+# tokenization, for the EMBEDDER ONLY. Stored content, FTS5, the reranker and
+# what the agent reads back are all untouched. Cost measured at +0.13% tokens.
+# Changing this changes every vector, so it is recorded in embed_meta.model
+# and doctor reports a flip as mixed provenance. Opt-in, default off.
+EMBED_NORMALIZE_CML = os.environ.get("MNEMOS_EMBED_NORMALIZE_CML", "0") == "1"
+
 FASTEMBED_CACHE = os.environ.get(
     "MNEMOS_EMBED_CACHE",
     os.path.expanduser("~/.cache/fastembed")

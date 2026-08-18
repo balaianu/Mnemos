@@ -32,7 +32,8 @@ from .prompts import (
     WEAVE_SYSTEM, CONTRADICT_SYSTEM,
     SYNTHESIS_SYSTEM, SYNTHESIS_SYSTEM_PROSE, TRIAGE_SYSTEM,
 )
-from ..embed import embed as fastembed_embed_raw, text_hash, prep_memory_text
+from ..embed import (embed as fastembed_embed_raw, text_hash, prep_memory_text,
+                     embed_model_id)
 from ..splitter import (
     split_content, split_is_lossless, needs_split, split_enabled,
     explode_cml_chain,
@@ -564,7 +565,7 @@ def apply_merge(conn, cluster_ids, merged_content, mem_by_id):
                 raise RuntimeError("fastembed returned empty embedding")
             store_embeddings(conn, [(
                 "memory", cid, text_hash(text), emb[0]
-            )], model=FASTEMBED_MODEL)
+            )], model=embed_model_id())
 
         new_id = new_ids[0]
 
@@ -792,7 +793,7 @@ def store_bridge_insight(conn, mid_a, mid_b, insight):
         emb = fastembed_embed([text])
         if emb and emb[0]:
             store_embeddings(conn, [("memory", cid, text_hash(text), emb[0])],
-                             model=FASTEMBED_MODEL)
+                             model=embed_model_id())
     except Exception as e:
         log(f"    Warning: bridge #{cid} stored without vector ({e}); "
             "run `mnemos embed-fill`")
@@ -1506,7 +1507,7 @@ def phase_synthesize(conn, all_embeddings, mem_by_id, execute=False):
                 if emb and emb[0]:
                     thash = text_hash(text)
                     store_embeddings(conn, [("memory", row[0], thash, emb[0])],
-                                     model=FASTEMBED_MODEL)
+                                     model=embed_model_id())
             except Exception as e:
                 log(f"  Warning: embedding failed for insight #{row[0]}: {e}")
         conn.commit()

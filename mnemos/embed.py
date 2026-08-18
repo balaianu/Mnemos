@@ -8,13 +8,17 @@ callers keep passing a plain "passage" / "query" role.
 """
 
 import hashlib
+import re
 import threading
 import time
 
 from .constants import (
     FASTEMBED_MODEL, FASTEMBED_CACHE, FASTEMBED_DIMS, DISABLE_MEM_ARENA,
+    EMBED_NORMALIZE_CML,
 )
 from . import _resource
+
+_WS_RE = re.compile(r"  +")
 
 _instance = None
 _last_used = 0.0
@@ -57,6 +61,47 @@ def maybe_unload(force=False):
             _resource.trim()
             return True
     return False
+
+
+# Only the operators an English WordPiece vocabulary cannot represent. The
+# survivors (-> <-> <- @ ~ null >) are left alone: substituting a token the
+# model already has would change the text for no measured reason.
+CML_EMBED_MAP = {
+    "\u2235": " because ",      # therefore-because
+    "\u2234": " therefore ",
+    "\u25b3": " changed from ",
+    "\u26a0": " warning ",
+    "\u2713": " confirmed ",
+    "\u2717": " rejected ",
+    "\u27ea": " ",              # FTS5 snippet markers, not semantic
+    "\u27eb": " ",
+    "\u2550": " ",              # box-drawing separators in prose memories
+}
+
+
+def normalize_cml(text):
+    """Replace CML operators with the words they stand for, for embedding only.
+
+    A no-op unless MNEMOS_EMBED_NORMALIZE_CML=1. Applied to every text on its
+    way to the encoder, documents and queries alike, so both sides of the index
+    are built from the same distribution.
+    """
+    if not EMBED_NORMALIZE_CML or not text:
+        return text
+    for sym, word in CML_EMBED_MAP.items():
+        if sym in text:
+            text = text.replace(sym, word)
+    return _WS_RE.sub(" ", text)
+
+
+def embed_model_id():
+    """Provenance string for embed_meta.model.
+
+    Normalization changes every vector without changing the model name, so it
+    has to be part of the identity or doctor's provenance check cannot see a
+    flip and the store silently mixes two geometries.
+    """
+    return FASTEMBED_MODEL + ("+cmlnorm" if EMBED_NORMALIZE_CML else "")
 
 
 def _prefixes():
@@ -112,7 +157,7 @@ def embed(texts, prefix="passage"):
         texts = [texts]
     doc_pfx, qry_pfx = _prefixes()
     pfx = qry_pfx if prefix == "query" else doc_pfx
-    prefixed = [f"{pfx}{t}" for t in texts]
+    prefixed = [f"{pfx}{normalize_cml(t)}" for t in texts]
     try:
         import math
         model = _get_model()

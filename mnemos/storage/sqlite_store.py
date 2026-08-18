@@ -605,6 +605,7 @@ class SQLiteStore(MnemosStore):
         commit=False joins the caller's transaction instead of committing
         here, so content and vector land atomically.
         """
+        from ..embed import embed_model_id
         conn = self._get_conn()
         join_col = self._get_vec_join_col()
         # Remove existing if any
@@ -626,7 +627,7 @@ class SQLiteStore(MnemosStore):
             # auto-assigned id as the vec0 row id
             cur = conn.execute(
                 "INSERT INTO embed_meta (source_db, source_id, text_hash, model) VALUES (?, ?, ?, ?)",
-                (self.SOURCE_KEY, mid, text_hash, FASTEMBED_MODEL),
+                (self.SOURCE_KEY, mid, text_hash, embed_model_id()),
             )
             meta_id = cur.lastrowid
             conn.execute(
@@ -643,7 +644,7 @@ class SQLiteStore(MnemosStore):
             vec_id = cur.lastrowid
             conn.execute(
                 "INSERT INTO embed_meta (id, source_db, source_id, text_hash, model) VALUES (?, ?, ?, ?, ?)",
-                (vec_id, self.SOURCE_KEY, mid, text_hash, FASTEMBED_MODEL),
+                (vec_id, self.SOURCE_KEY, mid, text_hash, embed_model_id()),
             )
         if commit:
             conn.commit()
@@ -877,12 +878,17 @@ class SQLiteStore(MnemosStore):
     def _store_archived_embedding(self, mid: int, embedding: list,
                                   text_hash: Optional[str] = None,
                                   commit: bool = True,
-                                  model: Optional[str] = FASTEMBED_MODEL):
+                                  model: Optional[str] = None):
         """Store/replace a memory's embedding in the tier-2 archived index.
 
         Mirrors _store_embedding; handles both arch vec schemas (implicit
-        rowid on pre-v10.24 stores, declared id PK on new ones).
+        rowid on pre-v10.24 stores, declared id PK on new ones). `model`
+        resolves at call time rather than import time so the recorded
+        provenance tracks the live embedder config.
         """
+        from ..embed import embed_model_id
+        if model is None:
+            model = embed_model_id()
         _store_archived_embedding_conn(self._get_conn(), mid, embedding,
                                        text_hash=text_hash, commit=commit,
                                        model=model, source_key=self.SOURCE_KEY)

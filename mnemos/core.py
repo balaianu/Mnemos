@@ -1488,7 +1488,8 @@ class Mnemos:
                 result[project]["subcategories"][sub] = n
         return result
 
-    def reindex_archived(self, batch_size: int = 128) -> dict:
+    def reindex_archived(self, batch_size: int = 128,
+                         rebuild: bool = False) -> dict:
         """Backfill the tier-2 archived vector index (v10.7.0).
 
         Embeds every archived memory that has no vector in embed_vec_arch yet
@@ -1496,7 +1497,17 @@ class Mnemos:
         can reach originals that consolidation archived and stripped of their
         primary-index vectors. Idempotent: re-running only embeds what is still
         missing.
+
+        rebuild=True drops the archived index first and recreates it at the
+        currently effective width. Backfill alone cannot repair a model or
+        dimension switch: after one, every archived row still HAS a vector,
+        just in the wrong geometry, so there is nothing "missing" to fill.
+        This is the tier-2 counterpart of `mnemos reembed`, which deliberately
+        touches only the active index.
         """
+        if rebuild and self.store.supports_maintenance:
+            from .embed import effective_dims
+            self.store.reset_arch_vec_index(effective_dims())
         if not hasattr(self.store, "archived_missing_embeddings"):
             return {"error": "tier-2 index only supported on SQLite-based stores"}
         missing = self.store.archived_missing_embeddings(namespace=self.namespace)
@@ -1801,22 +1812,37 @@ class Mnemos:
         # longer matches it, every insert is rejected and the store quietly
         # stops gaining vectors while old ones still answer queries.
         try:
-            from .constants import FASTEMBED_DIMS, FASTEMBED_MODEL
+            from .embed import effective_dims, effective_model
             stored_dims = self.store.get_vec_dims()
             if stored_dims is None:
                 report["checks"].append("Vector index: not created yet")
-            elif stored_dims != FASTEMBED_DIMS:
+            elif stored_dims != effective_dims():
                 report["issues"].append(
                     f"Vector dimension mismatch: embed_vec is {stored_dims}-wide "
-                    f"but {FASTEMBED_MODEL} is configured for {FASTEMBED_DIMS}. "
-                    "New vectors are being rejected on insert. Run "
-                    "`mnemos reembed` to rebuild the index at the configured "
+                    f"but {effective_model()} produces {effective_dims()}-dim "
+                    "vectors. New vectors are being rejected on insert. Run "
+                    "`mnemos reembed` to rebuild the index at the effective "
                     "width, or set MNEMOS_EMBED_DIMS back to "
                     f"{stored_dims} to keep the existing one."
                 )
             else:
                 report["checks"].append(
-                    f"Vector dimensions: {stored_dims} (matches {FASTEMBED_MODEL})")
+                    f"Vector dimensions: {stored_dims} (matches {effective_model()})")
+
+            # Tier-2 archived index width. reembed rebuilds only the ACTIVE
+            # index; a tier switch strands the archived vectors at the old
+            # width, expand_merged quietly returns nothing for them, and the
+            # completeness check below never noticed because it only counts
+            # missing rows. Field-reported from the first real tier switch.
+            arch_dims = self.store.get_arch_vec_dims()
+            if arch_dims is not None and stored_dims is not None                     and arch_dims != stored_dims:
+                report["issues"].append(
+                    f"Archived vector index is {arch_dims}-wide but the active "
+                    f"index is {stored_dims}-wide: tier-2 recall "
+                    "(expand_merged) cannot use the archived vectors. Run "
+                    "`mnemos reindex-archived --rebuild` to recreate it at "
+                    "the active width."
+                )
         except Exception as e:
             report["issues"].append(f"Dimension check failed: {e}")
 

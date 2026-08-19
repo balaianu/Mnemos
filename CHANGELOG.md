@@ -4,6 +4,15 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.32.2] - 2026-08-19 (the tier switch reaches the archived index; doctor respects pinning)
+
+Both field-reported from the first real tier switch on another host, hours after the tier documentation shipped.
+
+### Fixed
+- **`reembed` left the tier-2 archived index stranded.** It rebuilds only the active index, and `reindex-archived` could not repair the archived one either: after a model switch every archived row still HAS a vector, just in the wrong geometry, so a backfill that only fills missing rows finds nothing to do, and the completeness check reported the index healthy because it only counted rows. `reindex-archived --rebuild` now drops and recreates the archived index at the effective width and clears `embed_meta_arch` so the backfill genuinely re-embeds. `doctor` gains a width comparison between the two indexes and points at the flag.
+- **`doctor`'s dimension check compared against the raw constants instead of the effective (store-pinned) configuration.** A store correctly pinned to a non-default model reported a false "new vectors are being rejected on insert" while inserts succeeded, making `issues_detected` cosmetic. Same bug class as the provenance check fixed in 10.30.0: any doctor check that mentions the embedder must read the effective config, not the constants.
+
+4 regression tests.
 ## [10.32.1] - 2026-08-19 (language warning at store time)
 
 ### Fixed

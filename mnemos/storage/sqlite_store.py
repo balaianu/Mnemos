@@ -310,6 +310,39 @@ class SQLiteStore(MnemosStore):
         m = re.search(r"float\[(\d+)\]", row["sql"])
         return int(m.group(1)) if m else None
 
+    def get_arch_vec_dims(self):
+        """Declared width of embed_vec_arch, or None if absent."""
+        import re
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE name = 'embed_vec_arch'").fetchone()
+        if not row or not row["sql"]:
+            return None
+        m = re.search(r"float\[(\d+)\]", row["sql"])
+        return int(m.group(1)) if m else None
+
+    def reset_arch_vec_index(self, dims: int):
+        """Drop and recreate the tier-2 archived index at `dims`.
+
+        Mirrors reset_vec_index for the archived side: reuses the stored DDL
+        with only the width substituted, and clears embed_meta_arch so the
+        backfill re-embeds every archived memory instead of skipping rows
+        whose stale meta says they are already covered.
+        """
+        import re
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE name = 'embed_vec_arch'").fetchone()
+        if row and row["sql"]:
+            ddl = re.sub(r"float\[\d+\]", f"float[{dims}]", row["sql"])
+        else:
+            ddl = ("CREATE VIRTUAL TABLE embed_vec_arch USING vec0("
+                   f"id INTEGER PRIMARY KEY, embedding float[{dims}])")
+        conn.execute("DROP TABLE IF EXISTS embed_vec_arch")
+        conn.execute(ddl)
+        conn.execute("DELETE FROM embed_meta_arch")
+        conn.commit()
+
     def reset_vec_index(self, dims: int):
         """Drop and recreate embed_vec at `dims`, clearing active vector meta.
 

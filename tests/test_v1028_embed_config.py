@@ -146,3 +146,62 @@ def test_reembed_dry_run_touches_nothing(tmp_path):
     assert result["previous_dims"] == before
     assert "backup" not in result
     assert m.store.get_vec_dims() == before
+
+
+# --- tier-2 index follows a tier switch (v10.32.2, field-reported) ---------
+
+def test_arch_dims_readable(tmp_path):
+    m = _mnemos(tmp_path)
+    from mnemos.embed import effective_dims
+    assert m.store.get_arch_vec_dims() == effective_dims()
+
+
+def test_reset_arch_index_changes_width_and_clears_meta(tmp_path):
+    m = _mnemos(tmp_path)
+    conn = m.store._get_conn()
+    conn.execute("INSERT INTO embed_meta_arch (source_db, source_id, text_hash, model) "
+                 "VALUES ('memory', 1, 'h', 'old')")
+    conn.commit()
+    m.store.reset_arch_vec_index(384)
+    assert m.store.get_arch_vec_dims() == 384
+    # Meta must clear too, or the backfill skips rows whose stale meta says
+    # they are covered; that is exactly why plain backfill cannot repair a
+    # switch.
+    assert conn.execute("SELECT count(*) FROM embed_meta_arch").fetchone()[0] == 0
+
+
+def test_doctor_flags_stranded_archived_index(tmp_path):
+    """The field case: active index rebuilt at 384, archived left at 1024,
+    doctor reported complete because it only counted missing rows."""
+    m = _mnemos(tmp_path)
+    m.store.reset_vec_index(384)
+    import os
+    os.environ["MNEMOS_EMBED_DIMS"] = "384"
+    import importlib
+    import mnemos.constants, mnemos.embed
+    importlib.reload(mnemos.constants); importlib.reload(mnemos.embed)
+    try:
+        report = m.doctor()
+        assert any("Archived vector index" in i and "reindex-archived" in i
+                   for i in report["issues"])
+    finally:
+        del os.environ["MNEMOS_EMBED_DIMS"]
+        importlib.reload(mnemos.constants); importlib.reload(mnemos.embed)
+
+
+def test_doctor_dim_check_respects_pinning(tmp_path):
+    """Gap 2 from the field: the check compared against the raw constants, so
+    a store correctly pinned to a non-default model reported a false
+    'vectors are being rejected' issue while inserts succeeded."""
+    m = _mnemos(tmp_path)
+    from mnemos import embed as e
+    # Simulate a store pinned to bge/384 while the default remains e5/1024.
+    m.store.reset_vec_index(384)
+    changed = e.adopt_store_config("BAAI/bge-small-en-v1.5", 384)
+    assert changed, "pin must take effect for the scenario to be real"
+    try:
+        report = m.doctor()
+        assert not any("dimension mismatch" in i.lower()
+                       for i in report["issues"])
+    finally:
+        e.adopt_store_config("intfloat/multilingual-e5-large+cmlnorm", 1024)

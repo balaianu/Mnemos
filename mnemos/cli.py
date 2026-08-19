@@ -148,7 +148,8 @@ def cmd_embed_status(mnemos, args):
 
 
 def cmd_reindex_archived(mnemos, args):
-    print(json.dumps(mnemos.reindex_archived(), indent=2, ensure_ascii=False))
+    print(json.dumps(mnemos.reindex_archived(rebuild=args.rebuild),
+                     indent=2, ensure_ascii=False))
 
 
 def cmd_embed_fill(mnemos, args):
@@ -376,6 +377,9 @@ def main(argv=None):
     # reindex-archived
     p = sub.add_parser("reindex-archived",
                        help="Backfill the tier-2 archived vector index (embed all archived memories)")
+    p.add_argument("--rebuild", action="store_true",
+                   help="Drop and recreate the archived index at the effective width first "
+                        "(required after a model/dimension switch; backfill alone cannot repair one)")
     p.set_defaults(fn=cmd_reindex_archived)
 
     # embed-fill

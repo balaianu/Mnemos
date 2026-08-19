@@ -60,3 +60,45 @@ def scan_contents(rows, per_doc_threshold=0.005):
         if non_english_share(c or "") > per_doc_threshold:
             affected += 1
     return affected, total
+
+
+# --- Mojibake: UTF-8 decoded as Latin-1/cp1252 at ingestion ---
+# Field-reported: a single bad ingestion event left memories with sequences
+# like "\u00e2\u20ac\u201d" where an em dash should be, including CML
+# operators ("\u00e2\u2020\u2019" for the arrow). Those are invisible to the
+# operator map, which looks for the real characters, and they embed as
+# meaningless tokens on every model. SentencePiece swallowed them without
+# complaint for months, which is why nobody noticed until an English-vocab
+# model made them conspicuous.
+_MOJIBAKE_SIG = ("\u00e2\u20ac", "\u00e2\u2020", "\u00e2\u02c6",
+                 "\u00e2\u2013", "\u00e2\u0153", "\u00c3\u00a5",
+                 "\u00c3\u00a4", "\u00c3\u00b6", "\u00c3\u00a9",
+                 "\u00c2\u00bb", "\u00c2\u00ab", "\ufffd")
+
+
+def has_mojibake(text):
+    return any(sig in text for sig in _MOJIBAKE_SIG) if text else False
+
+
+def repair_mojibake(text):
+    """Reverse UTF-8-read-as-Latin-1, only when provably safe.
+
+    The corruption is deterministic (bytes decoded with the wrong codec), so
+    the repair is the inverse: re-encode as latin-1/cp1252 and decode as
+    UTF-8. It is attempted on the WHOLE text and accepted only when the
+    round-trip encodes cleanly AND strictly reduces the mojibake signature
+    count without introducing replacement characters. Returns (repaired,
+    changed). Anything that does not round-trip is left alone for a human.
+    """
+    if not has_mojibake(text):
+        return text, False
+    for codec in ("cp1252", "latin-1"):
+        try:
+            fixed = text.encode(codec).decode("utf-8")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            continue
+        before = sum(text.count(s) for s in _MOJIBAKE_SIG)
+        after = sum(fixed.count(s) for s in _MOJIBAKE_SIG)
+        if after < before and "\ufffd" not in fixed:
+            return fixed, True
+    return text, False

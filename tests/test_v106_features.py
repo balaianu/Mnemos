@@ -137,6 +137,13 @@ class TestContradictionRerankGuard:
                    enable_contradiction_detection=True, enable_rerank=True)
         # rerank degrades by returning docs untouched (no _rerank_score)
         monkeypatch.setattr(core_mod, "rerank", lambda q, docs: docs)
+        # This exercises the RERANK tier's unscored-guard, which since
+        # v10.34.0 is only reachable on a reranker the thresholds were
+        # calibrated for; the uncalibrated default downgrades to 'vec'
+        # before getting here.
+        import mnemos.constants as _consts
+        monkeypatch.setattr(_consts, "RERANKER_MODEL",
+                            "jinaai/jina-reranker-v2-base-multilingual")
         new_id = store.store_memory(
             Memory(namespace="t", project="dev", content="the sky is green"),
             embedding=_vec(0.001),

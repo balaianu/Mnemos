@@ -4,6 +4,15 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.34.0] - 2026-08-19 (store-path guard for uncalibrated rerankers; mojibake repair)
+
+### Fixed
+- **The legacy dedup/contradiction tiers no longer run on rerankers their thresholds were not calibrated for.** Those tiers sigmoid a raw cross-encoder logit and compare it to constants tuned on jina-v2. Measured on gte-modernbert (the v10.33.0 default), on real store content: identical pairs score 0.92-0.98, merely-related pairs 0.90-0.98, and UNRELATED pairs median 0.68 with outliers past the 0.85 dedup threshold. The identical and related ranges overlap, so no threshold separates them: the tier is structurally unsuited to that model, not mistuned, and on the new default it would have false-blocked stores aggressively. The store path now uses the rerank tier only on calibrated models (`RERANK_CONFIRM_CALIBRATED`), preferring NLI when available and the vec-distance tier otherwise, with a one-line stderr notice. An explicit `MNEMOS_DEDUP_CONFIRM=rerank` is honored only for calibrated models. Search ranking is unaffected; relative scores never had this problem.
+
+### Added
+- **Mojibake detection and repair** (field-reported: a single ingestion event that decoded UTF-8 as Latin-1 left memories with damaged text, including CML operators the map can no longer see, since it looks for the real characters). `mnemos doctor` reports affected memories; `mnemos doctor --migrate` applies the deterministic codec inverse, accepted only when the round-trip encodes cleanly and strictly reduces the damage, and re-embeds the repaired memories in the same step. Anything that does not round-trip cleanly is left for a human. The operator map deliberately does NOT learn mojibake variants: that would enshrine corruption as vocabulary.
+
+7 new tests. 386 pass.
 ## [10.33.1] - 2026-08-19 (startup language check judges the pinned store, not the raw default)
 
 ### Fixed

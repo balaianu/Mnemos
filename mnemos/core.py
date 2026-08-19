@@ -122,6 +122,7 @@ class Mnemos:
     # --- Store ---
 
     _lang_warned = False
+    _confirm_downgrade_logged = False
 
     def _maybe_warn_language(self, content, result):
         if Mnemos._lang_warned:
@@ -556,8 +557,27 @@ class Mnemos:
         # verdict is final (no fall-through to the coarser scorers); when
         # the runtime is unavailable the legacy path below takes over.
         import os as _os
+        from .constants import rerank_confirm_calibrated
         confirm_mode = _os.environ.get(
             "MNEMOS_DEDUP_CONFIRM", DEDUP_CONFIRM_DEFAULT).lower()
+        if (confirm_mode == "rerank" and self.enable_rerank
+                and not rerank_confirm_calibrated()):
+            # The sigmoid thresholds below were tuned on jina-v2's logit
+            # scale. On uncalibrated rerankers (measured on gte-modernbert:
+            # identical and merely-related pairs OVERLAP, unrelated pairs
+            # cross the threshold) the tier does not separate duplicates
+            # from neighbors at any cutoff, so prefer NLI when available
+            # and the vec-distance tier otherwise. An explicit
+            # MNEMOS_DEDUP_CONFIRM=rerank is honored only for calibrated
+            # models; this branch handles the DEFAULT, which most installs
+            # run.
+            confirm_mode = "nli" if nli.is_available() else "vec"
+            if not Mnemos._confirm_downgrade_logged:
+                Mnemos._confirm_downgrade_logged = True
+                import sys as _sys
+                print("Mnemos: dedup confirm tier '" + confirm_mode + "' "
+                      "(the rerank tier's thresholds are not calibrated for "
+                      "the configured reranker)", file=_sys.stderr)
         if confirm_mode == "nli" and nli.is_available():
             ranked_cands = sorted(
                 candidates.values(),
@@ -591,7 +611,7 @@ class Mnemos:
         # duplicate and the store was blocked, distinct or not (silent data loss).
         score = None
         best_id = None
-        if self.enable_rerank:
+        if self.enable_rerank and confirm_mode != "vec":
             try:
                 docs = [{"text": c["content"], "id": c["id"]} for c in candidates.values()]
                 ranked = rerank(content, docs)
@@ -662,11 +682,17 @@ class Mnemos:
         Mode is set via MNEMOS_CONTRADICT_MODE env (default 'rerank').
         """
         import os
+        from .constants import rerank_confirm_calibrated
         mode = os.environ.get(
             "MNEMOS_CONTRADICT_MODE", DEFAULT_CONTRADICT_MODE,
         ).lower()
         if mode == "off":
             return []
+        if mode == "rerank" and not rerank_confirm_calibrated():
+            # Same logit-scale problem as the dedup tier: the contradiction
+            # bands were tuned on jina-v2. Prefer NLI; without it, fall back
+            # to the vec band alone (link candidates, no rerank refinement).
+            mode = "nli" if nli.is_available() else "vec"
 
         # Tier 1: vec gate
         vec_results = self.store.search_vec(embedding, limit=10)
@@ -1796,6 +1822,44 @@ class Mnemos:
                 report["checks"].append(msg)
         except Exception as e:
             report["issues"].append(f"Embedder pinning check failed: {e}")
+
+        # --- Mojibake (UTF-8 decoded as Latin-1 at ingestion) ---
+        # Damaged operators are invisible to the CML map (it looks for the
+        # real characters) and embed as meaningless tokens on every model.
+        # Repair is the deterministic codec inverse, applied only when the
+        # round-trip is provably clean, and only under --migrate, which is
+        # doctor's existing consent gate for data-touching fixes. A repair
+        # changes the canonical embed text, so the memory is re-embedded in
+        # the same step.
+        try:
+            from .language import has_mojibake, repair_mojibake
+            damaged = [(mid, c) for mid, c in self.store.iter_active_contents(
+                           self.namespace) if has_mojibake(c)]
+            if damaged:
+                if not migrate:
+                    report["issues"].append(
+                        f"{len(damaged)} memories contain mojibake "
+                        "(UTF-8 decoded as Latin-1 at ingestion; ids "
+                        + ", ".join(f"#{m}" for m, _ in damaged[:8])
+                        + ("..." if len(damaged) > 8 else "")
+                        + "). CML operators inside them are invisible to the "
+                        "operator map. Run `mnemos doctor --migrate` to apply "
+                        "the reversible codec repair and re-embed them.")
+                else:
+                    fixed = failed = 0
+                    for mid, c in damaged:
+                        repaired, changed = repair_mojibake(c)
+                        if changed:
+                            self.update(mid, content=repaired)
+                            fixed += 1
+                        else:
+                            failed += 1
+                    report["migrations_applied"].append(
+                        f"repaired mojibake in {fixed} memories"
+                        + (f" ({failed} did not round-trip cleanly and were "
+                           "left for manual review)" if failed else ""))
+        except Exception as e:
+            report["issues"].append(f"Mojibake check failed: {e}")
 
         # --- Language coverage ---
         # An English-only model pair on a non-English store fails silently:

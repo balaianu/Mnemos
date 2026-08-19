@@ -271,3 +271,42 @@ def test_http_startup_check_respects_store_pinning(tmp_path, monkeypatch):
         # test that embeds for real loads e5 against a 384-wide index. Same
         # leak class as the http fixture bug this file just chronicled.
         importlib.reload(e)
+
+
+# --- mojibake detection and repair (v10.34.0, field-reported) ---------------
+
+def test_mojibake_detected_and_repaired():
+    from mnemos.language import has_mojibake, repair_mojibake
+    bad = "beslut â€” taget, navajoâ†’anthropic"
+    assert has_mojibake(bad)
+    fixed, changed = repair_mojibake(bad)
+    assert changed and "—" in fixed and "→" in fixed
+
+
+def test_clean_text_is_never_touched():
+    from mnemos.language import has_mojibake, repair_mojibake
+    ok = "normal → text — fine, åtgärd klar"
+    assert not has_mojibake(ok)
+    assert repair_mojibake(ok) == (ok, False)
+
+
+def test_doctor_reports_mojibake_without_migrate(tmp_path):
+    m = _mnemos(tmp_path)
+    _seed(m, ["ok content", "trasig â€” minne â†’ fel"])
+    report = m.doctor(migrate=False)
+    assert any("mojibake" in i for i in report["issues"])
+
+
+def test_doctor_migrate_repairs_and_reembeds(tmp_path, monkeypatch):
+    import mnemos.core
+    monkeypatch.setattr(mnemos.core, "embed",
+                        lambda texts, prefix="passage": [[0.1] * FASTEMBED_DIMS
+                                                         for _ in texts])
+    m = _mnemos(tmp_path)
+    _seed(m, ["trasig â€” minne"])
+    report = m.doctor(migrate=True)
+    assert any("repaired mojibake in 1" in x
+               for x in report["migrations_applied"])
+    fixed = m.store._get_conn().execute(
+        "SELECT content FROM memories WHERE id=1").fetchone()[0]
+    assert "—" in fixed and "â€" not in fixed

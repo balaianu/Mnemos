@@ -1890,6 +1890,14 @@ class SQLiteStore(MnemosStore):
 
     # --- Vector provenance ---
 
+    def iter_active_contents(self, namespace=None):
+        """(id, content) for every active memory; doctor's full-store scans."""
+        conn = self._get_conn()
+        ns = namespace or self.namespace
+        return [(r["id"], r["content"]) for r in conn.execute(
+            "SELECT id, content FROM memories WHERE namespace = ? AND status = 'active'",
+            (ns,))]
+
     def sample_contents(self, namespace=None, limit=500):
         """Sample of active memory contents for the language-coverage scan."""
         conn = self._get_conn()

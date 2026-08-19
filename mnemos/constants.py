@@ -81,6 +81,22 @@ DEFAULT_CONTRADICT_MODE = os.environ.get(
 # --- Dedup rerank threshold ---
 DEDUP_RERANK_THRESHOLD = 0.85  # raised from 0.70: 0.70 over-blocked related-but-distinct memories (reranker scored genuinely distinct facts 0.81-0.84). Bias toward false-store (Nyx merges dups later) over false-block (silent memory loss).
 
+# The legacy rerank-confirm tiers (dedup above, contradiction bands below)
+# sigmoid a raw cross-encoder logit and compare it to these constants, and
+# logit scales are per-model: the numbers were tuned on jina-v2. Measured on
+# gte-modernbert (the v10.33.0 default), identical pairs score 0.92-0.98 and
+# UNRELATED pairs median 0.68 with outliers past 0.85, and the identical and
+# related ranges OVERLAP, so no threshold separates them: the sigmoid tier is
+# structurally unsuited to that model, not merely mistuned. The store path
+# therefore only uses the rerank tier on models it was calibrated for, and
+# otherwise prefers NLI when available, else the vec-distance tier.
+RERANK_CONFIRM_CALIBRATED = ("jina-reranker-v2",)
+
+
+def rerank_confirm_calibrated(model_id=None):
+    m = (model_id if model_id is not None else RERANKER_MODEL).lower()
+    return any(t in m for t in RERANK_CONFIRM_CALIBRATED)
+
 # --- NLI decision layer (v10.15.0, bench-backed: benchmarks/nli-bench) ---
 # The NLI layer replaces the cross-encoder for the store DECISION questions
 # (duplicate? contradiction?). The reranker stays for search ranking, where

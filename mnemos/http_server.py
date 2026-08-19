@@ -170,6 +170,25 @@ def serve(http: str | None = None, unix: str | None = None, mnemos=None) -> None
     _resource.start_idle_reaper(
         log=lambda m: (sys.stderr.write(m + "\n"), sys.stderr.flush()))
 
+    # One-line language-coverage notice at startup. doctor carries the full
+    # version; this is for the operator who never runs doctor.
+    try:
+        from .language import scan_contents, is_english_only
+        from .embed import effective_model
+        from .constants import RERANKER_MODEL, DEFAULT_ENABLE_RERANK
+        if is_english_only(effective_model()) and (
+                not DEFAULT_ENABLE_RERANK or is_english_only(RERANKER_MODEL)):
+            affected, total = scan_contents(
+                mnemos.store.sample_contents(mnemos.namespace))
+            if total and affected / total > 0.10:
+                sys.stderr.write(
+                    f"Mnemos: {affected}/{total} sampled memories contain "
+                    "non-English content but the configured models are "
+                    "English-only; see `mnemos doctor` for options\n")
+                sys.stderr.flush()
+    except Exception:
+        pass
+
     servers = []
     if http:
         host, port = _parse_hostport(http)

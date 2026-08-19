@@ -1853,6 +1853,14 @@ class SQLiteStore(MnemosStore):
 
     # --- Vector provenance ---
 
+    def sample_contents(self, namespace=None, limit=500):
+        """Sample of active memory contents for the language-coverage scan."""
+        conn = self._get_conn()
+        ns = namespace or self.namespace
+        return [r["content"] for r in conn.execute(
+            "SELECT content FROM memories WHERE namespace = ? AND status = 'active' "
+            "ORDER BY id DESC LIMIT ?", (ns, limit))]
+
     def get_vector_provenance(self) -> list:
         conn = self._get_conn()
         rows = conn.execute(

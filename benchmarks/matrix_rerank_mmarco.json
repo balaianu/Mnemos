@@ -1,0 +1,41 @@
+{
+  "model": "BAAI/bge-small-en-v1.5",
+  "dims": 384,
+  "questions": 91,
+  "elapsed_s": 1293.1,
+  "modes": {
+    "hybrid+rerank": {
+      "overall": {
+        "R@1": 69.23,
+        "R@3": 84.62,
+        "R@5": 90.11,
+        "R@10": 95.6
+      },
+      "by_type": {
+        "single-session-user": {
+          "R@1": 90.0,
+          "R@3": 95.0,
+          "R@5": 100.0,
+          "R@10": 100.0
+        },
+        "single-session-preference": {
+          "R@1": 46.67,
+          "R@3": 66.67,
+          "R@5": 76.67,
+          "R@10": 86.67
+        },
+        "temporal-reasoning": {
+          "R@1": 75.61,
+          "R@3": 92.68,
+          "R@5": 95.12,
+          "R@10": 100.0
+        }
+      },
+      "n_by_type": {
+        "single-session-user": 20,
+        "single-session-preference": 30,
+        "temporal-reasoning": 41
+      }
+    }
+  }
+}

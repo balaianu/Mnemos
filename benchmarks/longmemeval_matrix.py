@@ -88,6 +88,13 @@ def main():
     ap.add_argument("--limit", type=int,
                     help="first N questions; the dataset is grouped by type so "
                          "this is only useful for smoke tests")
+    ap.add_argument("--categories",
+                    help="comma-separated question_type substrings to keep, "
+                         "applied AFTER --sample so the questions are "
+                         "identical to a full run of the same seed. Screening "
+                         "tool: categories already saturated at 100%% cannot "
+                         "discriminate between configurations, so running them "
+                         "is cost without signal.")
     ap.add_argument("--sample", type=int,
                     help="stratified sample of N questions across question "
                          "types (fixed seed, comparable across runs)")
@@ -104,12 +111,44 @@ def main():
     if args.tempdb:
         lmb.TEMP_DB = args.tempdb
 
+    # Rerankers outside fastembed's six have to be registered before the
+    # encoder is constructed. Bench tooling only: the package deliberately
+    # does not reach outside the catalogue on its own.
+    custom = os.environ.get("MNEMOS_RERANKER_CUSTOM_HF")
+    if custom:
+        from fastembed.rerank.cross_encoder import TextCrossEncoder
+        from fastembed.common.model_description import ModelSource
+        try:
+            TextCrossEncoder.add_custom_model(
+                model=custom, sources=ModelSource(hf=custom),
+                model_file=os.environ.get("MNEMOS_RERANKER_CUSTOM_FILE",
+                                          "onnx/model.onnx"),
+                description="custom reranker under test", license="unknown",
+                size_in_gb=0.0)
+            print(f"registered custom reranker {custom}", flush=True)
+        except ValueError as e:
+            # Already in fastembed's catalogue. Setting the env var for a
+            # supported model is a reasonable thing to do, so treat it as a
+            # no-op rather than a failure.
+            if "already registered" not in str(e):
+                raise
+            print(f"{custom} already in catalogue, using it directly", flush=True)
+
     with open(lmb.DATA_PATH) as f:
         data = json.load(f)
     if args.limit:
         data = data[: args.limit]
     if args.sample and args.sample < len(data):
         data = _stratify(data, args.sample)
+    if args.categories:
+        wanted = [c.strip().lower() for c in args.categories.split(",") if c.strip()]
+        data = [e for e in data
+                if any(w in e["question_type"].lower() for w in wanted)]
+        from collections import Counter
+        print(f"category filter -> {len(data)} questions "
+              + ", ".join(f"{t}={n}" for t, n in
+                          sorted(Counter(e["question_type"] for e in data).items())),
+              flush=True)
 
     print(f"model={FASTEMBED_MODEL} dims={FASTEMBED_DIMS} modes={modes} questions={len(data)}", flush=True)
     lmb.fastembed_embed(["warmup"], prefix="search_query")

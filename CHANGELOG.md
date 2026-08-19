@@ -4,6 +4,15 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.32.0] - 2026-08-19 (language-coverage detection)
+
+### Added
+- **`mnemos doctor` now checks language coverage.** An English-only model pair on a non-English store fails silently: nothing errors, retrieval is just quietly mediocre, and nothing attributes it. Same failure shape as a dimension mismatch or a provenance split, so it gets the same treatment: doctor samples stored content and raises an issue when substantial non-English text coexists with an English-only embedder AND reranker (a check, not an issue, when only one of the two is English-only, since FTS and the multilingual stage still cover the terms).
+  The heuristic is a per-memory non-ASCII letter share with CML operators and emoji excluded, thresholded at 0.5%. That number is calibrated against a real English-primary store whose non-English TERMS OF ART are its retrieval keys: those memories measure 0.5-2%, and they are exactly the case where a multilingual reranker still earns its place. Pure-English stores measure 0 and never trip it. Unknown model ids are assumed capable, because a false "your setup is fine" is worse than a dismissible warning.
+- One-line startup notice on the shared HTTP server when the same condition holds, for the operator who never runs doctor.
+- `docs/usage.md`: measured model-tier table (default / multilingual / mixed) and the two switching rules: changing the embedder requires `mnemos reembed` because stored vectors are only meaningful under the model that produced them, while changing the reranker touches no stored data and is freely reversible.
+- `mnemos/language.py`, `SQLiteStore.sample_contents()`. 13 tests.
+
 ## [10.31.1] - 2026-08-18 (CML operators reach the reranker too)
 
 ### Fixed

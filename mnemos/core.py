@@ -1705,15 +1705,55 @@ class Mnemos:
         try:
             adopted = getattr(self.store, "_embed_adoption", None) or {}
             if adopted:
-                report["checks"].append(
-                    "Embedder pinned to this store's existing vectors: "
-                    + ", ".join(f"{k} {old} -> {new}"
-                                for k, (old, new) in adopted.items())
-                    + ". Run `mnemos reembed` to migrate the store to the "
-                      "configured default instead."
-                )
+                msg = ("Embedder pinned to this store's existing vectors: "
+                       + ", ".join(f"{k} {old} -> {new}"
+                                   for k, (old, new) in adopted.items()))
+                msg += (". Run `mnemos reembed` to migrate to the configured "
+                        "default, or set MNEMOS_EMBED_MODEL explicitly to keep "
+                        "the pinned model permanently.")
+                report["checks"].append(msg)
         except Exception as e:
             report["issues"].append(f"Embedder pinning check failed: {e}")
+
+        # --- Language coverage ---
+        # An English-only model pair on a non-English store fails silently:
+        # nothing errors, retrieval is just quietly mediocre. Same failure
+        # shape as a dimension mismatch, same treatment: detect and say so.
+        try:
+            from .language import scan_contents, is_english_only
+            from .embed import effective_model
+            from .constants import RERANKER_MODEL, DEFAULT_ENABLE_RERANK
+            enc_en = is_english_only(effective_model())
+            rr_en = is_english_only(RERANKER_MODEL) if DEFAULT_ENABLE_RERANK else True
+            if enc_en or rr_en:
+                affected, total = scan_contents(
+                    self.store.sample_contents(self.namespace))
+                if total and affected / total > 0.10:
+                    both = enc_en and rr_en
+                    report["issues" if both else "checks"].append(
+                        f"Language coverage: {affected} of {total} sampled "
+                        "memories contain non-English content, but "
+                        + ("both the embedder and the reranker are "
+                           if both else
+                           ("the embedder is " if enc_en else "the reranker is "))
+                        + "English-only. "
+                        + ("Non-English retrieval will be degraded on every "
+                           "path; use the multilingual tier "
+                           "(intfloat/multilingual-e5-large + "
+                           "jinaai/jina-reranker-v2-base-multilingual) or the "
+                           "mixed tier (English embedder + multilingual "
+                           "reranker)." if both else
+                           "FTS and the multilingual stage still cover it; "
+                           "this is workable for a mixed store, but not for a "
+                           "predominantly non-English one.")
+                    )
+                else:
+                    report["checks"].append(
+                        f"Language coverage: {affected}/{total} sampled "
+                        "memories non-English; English-only models are fine "
+                        "for this store")
+        except Exception as e:
+            report["issues"].append(f"Language coverage check failed: {e}")
 
         # --- Vector dimensions ---
         # The index width is fixed at creation. If the configured model no

@@ -219,7 +219,7 @@ class TestDoctorMigrate:
         # matching embedding row) because a fresh EMPTY store intentionally
         # gets the empty-store hint since v10.23.0 (vacuous-green guard),
         # and a memory without its embedding trips the coverage check.
-        from mnemos.constants import FASTEMBED_MODEL
+        from mnemos.embed import embed_model_id
         from mnemos.embed import prep_memory_text, text_hash
         conn = m.store._get_conn()
         conn.execute(
@@ -230,7 +230,7 @@ class TestDoctorMigrate:
             "dev", "F: seeded", "", mem_type="fact", layer="semantic"))
         conn.execute(
             "INSERT INTO embed_meta (source_db, source_id, text_hash, model) "
-            "VALUES ('memory', 1, ?, ?)", (thash, FASTEMBED_MODEL))
+            "VALUES ('memory', 1, ?, ?)", (thash, embed_model_id()))
         conn.commit()
         report = m.doctor(migrate=False)
         assert report["status"] == "healthy", report["issues"]

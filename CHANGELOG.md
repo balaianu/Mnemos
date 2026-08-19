@@ -4,6 +4,14 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.35.1] - 2026-08-19 (the token id is the truth)
+
+### Fixed
+- **The reranker CML probe trusts token ids, not token strings.** Unigram/XLM-R tokenizers echo an unrepresentable character back as its own surface piece: jina-reranker-v2-base-multilingual encodes the because-operator to tokens `['▁','∵']` with ids `[6,3]` where 3 IS `<unk>` — so the string test judged it native, the map never applied, and the cross-encoder scored text whose 3rd most common operator round-trips to nothing (field-reported with the tokenizer transcript). The probe now checks ids against the tokenizer's unk id first; the string and byte-fallback checks remain as fallbacks for fakes and BPE mojibake.
+- **The probe is per-symbol, and the map follows it.** `_probe_cml_support` returns the frozenset of missing operators instead of a bool, and the reranker spells out only those: jina-v2-multilingual carries 10 of 13 natively (missing: because-operator + both FTS5 snippet markers) and the ablation's R@1 gain comes from the cross-encoder attending to exactly the markers a bool would have thrown away. Measured against the real tokenizers: jina-v2 loses 3, jina-v1-turbo/tiny lose 1 (✗), gte-modernbert (byte BPE) loses all 13 — the default's behavior is unchanged. `apply_cml_map` gains an optional `symbols` argument; `None` keeps the embedder's full-map contract.
+
+2 regression tests + 2 updated to the set contract. 395 pass.
+
 ## [10.35.0] - 2026-08-19 (the store declares its reranker)
 
 ### Added

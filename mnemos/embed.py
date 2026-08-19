@@ -159,16 +159,19 @@ CML_EMBED_MAP = {
 }
 
 
-def apply_cml_map(text):
+def apply_cml_map(text, symbols=None):
     """Substitute CML operators for the words they stand for. Ungated.
 
     Split out from normalize_cml so the reranker can decide for itself: the
     embedder applies this on a config flag, while the reranker applies it only
-    when its own tokenizer cannot represent the operators.
+    to the operators its own tokenizer cannot represent -- `symbols` restricts
+    the substitution to that set; None means the full map (the embedder case).
     """
     if not text:
         return text
     for sym, word in CML_EMBED_MAP.items():
+        if symbols is not None and sym not in symbols:
+            continue
         if sym in text:
             text = text.replace(sym, word)
     return _WS_RE.sub(" ", text)

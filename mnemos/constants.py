@@ -250,8 +250,10 @@ FASTEMBED_DIMS = int(os.environ.get("MNEMOS_EMBED_DIMS", "384"))
 EMBED_DIMS_EXPLICIT = "MNEMOS_EMBED_DIMS" in os.environ
 # --- CML operator normalization (opt-in) ---
 # CML's relational operators are unicode symbols. SentencePiece vocabularies
-# (e5, Jina reranker: 250k) carry them; English WordPiece vocabularies
-# (bge/gte/mxbai/nomic/MiniLM: 30522) do not, and map ALL of them to a single
+# (e5, Jina reranker: 250k) carry most of them (not all: even 250k XLM-R
+# lacks the because-operator and the FTS5 snippet markers, see
+# rerank._probe_cml_support); English WordPiece vocabularies
+# (bge/gte/mxbai/nomic/MiniLM: 30522) map ALL of them to a single
 # shared [UNK]. Measured on a 720-memory production store: 901 UNK tokens, and
 # because [UNK] has one embedding, "migration confirmed" and "migration
 # rejected" become the same vector.

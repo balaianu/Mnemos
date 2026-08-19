@@ -259,18 +259,80 @@ def test_probe_flags_byte_fallback_fragmentation():
     class Enc:
         class model:
             tokenizer = MojibakeEnc(["â", "ľĵ"])   # byte pieces
-    assert r._probe_cml_support(Enc) is True
+    assert r._probe_cml_support(Enc)
 
     class Enc2:
         class model:
             tokenizer = None
         def __init__(self): pass
-    # a tokenizer whose pieces contain the real symbol is judged native
+    # a tokenizer whose pieces contain the real symbol AND assign it a real
+    # id is judged native
     class NativeEnc:
         class model:
             class tokenizer:
                 @staticmethod
+                def token_to_id(t):
+                    return 3 if t == "<unk>" else None
+                @staticmethod
                 def encode(sym, add_special_tokens=False):
-                    class E: tokens = ["▁", sym]
+                    class E:
+                        tokens = ["▁", sym]
+                        ids = [6, 2299]
                     return E()
-    assert r._probe_cml_support(NativeEnc) is False
+    assert not r._probe_cml_support(NativeEnc)
+
+
+# --- the probe trusts ids over token strings (v10.35.1) -----------------------
+
+def test_probe_catches_unk_echoed_as_surface_char():
+    """Unigram/XLM-R tokenizers echo an unrepresentable character back as its
+    own surface piece: jina-v2-multilingual encodes the because-operator to
+    tokens ['▁','∵'] with ids [6,3] where 3 IS <unk>. The string test alone
+    judges that native; the id is the ground truth."""
+    import mnemos.rerank as r
+
+    class EchoUnkEnc:
+        class model:
+            class tokenizer:
+                @staticmethod
+                def token_to_id(t):
+                    return 3 if t == "<unk>" else None
+                @staticmethod
+                def encode(sym, add_special_tokens=False):
+                    class E:
+                        tokens = ["▁", sym]   # surface echo, looks native
+                        ids = [6, 3]          # ...but 3 = <unk>
+                    return E()
+
+    missing = r._probe_cml_support(EchoUnkEnc)
+    from mnemos.embed import CML_EMBED_MAP
+    assert missing == frozenset(s for s in CML_EMBED_MAP if not s.isspace())
+
+
+def test_probe_is_per_symbol_and_map_respects_it():
+    """A model missing only the because-operator gets exactly that one
+    spelled out; natively represented operators stay untouched in the
+    reranker prep."""
+    import mnemos.rerank as r
+    from mnemos.embed import apply_cml_map
+
+    class PartialEnc:
+        class model:
+            class tokenizer:
+                @staticmethod
+                def token_to_id(t):
+                    return 3 if t == "<unk>" else None
+                @staticmethod
+                def encode(sym, add_special_tokens=False):
+                    class E:
+                        tokens = ["▁", sym]
+                        ids = [6, 3 if sym == "∵" else 2299]
+                    return E()
+
+    missing = r._probe_cml_support(PartialEnc)
+    assert missing == frozenset({"∵"})
+
+    out = apply_cml_map("a ∵ b → c", missing)
+    assert "∵" not in out and "because" in out
+    assert "→" in out                      # native operator untouched
+    assert apply_cml_map("x → y", frozenset()) == "x → y"

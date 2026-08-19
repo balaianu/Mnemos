@@ -354,3 +354,60 @@ def test_doctor_flags_stale_archived_provenance(tmp_path):
     conn.commit()
     report = m.doctor()
     assert any("Archived vector provenance" in i for i in report["issues"])
+
+
+# --- store-declared reranker (v10.35.0) --------------------------------------
+
+def test_store_declared_reranker_is_adopted(tmp_path, monkeypatch):
+    """A multilingual store declares its reranker in store_settings and every
+    launch context gets it, instead of correctness depending on an env var
+    reaching cron, systemd, hooks and shells separately (field report)."""
+    import importlib
+    monkeypatch.delenv("MNEMOS_RERANKER_MODEL", raising=False)
+    import mnemos.constants as c
+    importlib.reload(c)
+    from mnemos.storage.sqlite_store import SQLiteStore
+    store = SQLiteStore(db_path=str(tmp_path / "m.db"), namespace="t")
+    store._get_conn()
+    store.set_store_setting("reranker_model",
+                            "jinaai/jina-reranker-v2-base-multilingual")
+    store.close()
+    reopened = SQLiteStore(db_path=str(tmp_path / "m.db"), namespace="t")
+    reopened._get_conn()
+    try:
+        assert c.RERANKER_MODEL == "jinaai/jina-reranker-v2-base-multilingual"
+        assert reopened._reranker_adoption is not None
+    finally:
+        importlib.reload(c)
+
+
+def test_explicit_env_outranks_the_declaration(tmp_path, monkeypatch):
+    import importlib
+    monkeypatch.setenv("MNEMOS_RERANKER_MODEL",
+                       "Alibaba-NLP/gte-reranker-modernbert-base")
+    import mnemos.constants as c
+    importlib.reload(c)
+    from mnemos.storage.sqlite_store import SQLiteStore
+    store = SQLiteStore(db_path=str(tmp_path / "m.db"), namespace="t")
+    store._get_conn()
+    store.set_store_setting("reranker_model", "jinaai/jina-reranker-v2-base-multilingual")
+    store.close()
+    reopened = SQLiteStore(db_path=str(tmp_path / "m.db"), namespace="t")
+    reopened._get_conn()
+    try:
+        assert c.RERANKER_MODEL == "Alibaba-NLP/gte-reranker-modernbert-base"
+        assert reopened._reranker_adoption is None
+    finally:
+        monkeypatch.delenv("MNEMOS_RERANKER_MODEL", raising=False)
+        importlib.reload(c)
+
+
+def test_settings_roundtrip(tmp_path):
+    from mnemos.storage.sqlite_store import SQLiteStore
+    store = SQLiteStore(db_path=str(tmp_path / "m.db"), namespace="t")
+    store._get_conn()
+    assert store.get_store_setting("reranker_model") is None
+    store.set_store_setting("reranker_model", "x/y")
+    assert store.get_store_setting("reranker_model") == "x/y"
+    store.set_store_setting("reranker_model", None)
+    assert store.get_store_setting("reranker_model") is None

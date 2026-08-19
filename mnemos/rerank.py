@@ -10,7 +10,8 @@ import os
 import threading
 import time
 
-from .constants import (RERANKER_MODEL, FASTEMBED_CACHE, DISABLE_MEM_ARENA,
+from . import constants as _c
+from .constants import (FASTEMBED_CACHE, DISABLE_MEM_ARENA,
                         RERANK_BATCH, RERANK_MAX_CHARS, RERANK_MAX_TOKENS)
 from . import _resource
 
@@ -33,8 +34,8 @@ def _register_if_custom(TextCrossEncoder):
     try:
         from fastembed.common.model_description import ModelSource
         TextCrossEncoder.add_custom_model(
-            model=RERANKER_MODEL,
-            sources=ModelSource(hf=RERANKER_MODEL),
+            model=_c.RERANKER_MODEL,
+            sources=ModelSource(hf=_c.RERANKER_MODEL),
             model_file=os.environ.get("MNEMOS_RERANKER_MODEL_FILE",
                                       "onnx/model.onnx"),
             description="registered by mnemos", license="unknown",
@@ -48,7 +49,7 @@ def _register_if_custom(TextCrossEncoder):
         # name the actual failure instead.
         import sys
         print(f"Mnemos: could not register custom reranker "
-              f"{RERANKER_MODEL} with fastembed ({e}); the load will fail "
+              f"{_c.RERANKER_MODEL} with fastembed ({e}); the load will fail "
               "if the model is not in fastembed's catalogue", file=sys.stderr)
 
 
@@ -141,7 +142,7 @@ def _get_reranker():
                 from fastembed.rerank.cross_encoder import TextCrossEncoder
                 _register_if_custom(TextCrossEncoder)
                 kwargs = {
-                    "model_name": RERANKER_MODEL,
+                    "model_name": _c.RERANKER_MODEL,
                     "cache_dir": FASTEMBED_CACHE,
                 }
                 if DISABLE_MEM_ARENA:
@@ -151,7 +152,7 @@ def _get_reranker():
                 _needs_cml_map = _probe_cml_support(_instance)
                 if _needs_cml_map:
                     import sys
-                    print(f"Mnemos: {RERANKER_MODEL} cannot represent CML "
+                    print(f"Mnemos: {_c.RERANKER_MODEL} cannot represent CML "
                           "operators; spelling them out for reranking",
                           file=sys.stderr)
             except ImportError:

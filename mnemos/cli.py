@@ -157,6 +157,34 @@ def cmd_embed_fill(mnemos, args):
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
 
+SETTABLE = {
+    "reranker_model": "cross-encoder the store declares it needs "
+                      "(e.g. jinaai/jina-reranker-v2-base-multilingual for "
+                      "multilingual content); explicit MNEMOS_RERANKER_MODEL "
+                      "env still overrides",
+}
+
+
+def cmd_settings(mnemos, args):
+    store = mnemos.store
+    if not hasattr(store, "get_store_setting"):
+        print("settings require the SQLite backend"); return
+    if args.action == "list":
+        out = {k: store.get_store_setting(k) for k in SETTABLE}
+        print(json.dumps(out, indent=2)); return
+    if args.key not in SETTABLE:
+        print(f"unknown setting '{args.key}'; known: {', '.join(SETTABLE)}"); return
+    if args.action == "get":
+        print(json.dumps({args.key: store.get_store_setting(args.key)})); return
+    if args.action == "unset":
+        store.set_store_setting(args.key, None)
+        print(json.dumps({args.key: None, "status": "unset"})); return
+    store.set_store_setting(args.key, args.value)
+    print(json.dumps({args.key: args.value, "status": "set",
+                      "note": "takes effect on next process start; explicit "
+                              "MNEMOS_RERANKER_MODEL env overrides it"}))
+
+
 def cmd_reembed(mnemos, args):
     result = mnemos.reembed(batch_size=args.batch_size,
                             backup=not args.no_backup,
@@ -389,6 +417,14 @@ def main(argv=None):
     p.add_argument("--dry-run", action="store_true",
                    help="Report how many are missing without embedding anything")
     p.set_defaults(fn=cmd_embed_fill)
+
+    # settings
+    p = sub.add_parser("settings",
+                       help="Store-declared preferences (survive every launch context, unlike env vars)")
+    p.add_argument("action", choices=["get", "set", "unset", "list"])
+    p.add_argument("key", nargs="?", default="")
+    p.add_argument("value", nargs="?", default="")
+    p.set_defaults(fn=cmd_settings)
 
     # reembed
     p = sub.add_parser("reembed",

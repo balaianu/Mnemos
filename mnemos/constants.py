@@ -289,6 +289,9 @@ RERANKER_MODEL = os.environ.get(
     "MNEMOS_RERANKER_MODEL",
     "Alibaba-NLP/gte-reranker-modernbert-base"
 )
+# Explicit env is an instruction and outranks a store-declared preference;
+# unset means the default is only a seed, same contract as the embedder vars.
+RERANKER_EXPLICIT = "MNEMOS_RERANKER_MODEL" in os.environ
 
 # --- Reranker / embedder tensor shape bounds ---
 # The ONNX Runtime CPU arena keeps the peak allocation of every tensor SHAPE it

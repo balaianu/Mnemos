@@ -4,6 +4,13 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.35.0] - 2026-08-19 (the store declares its reranker)
+
+### Added
+- **`store_settings` and `mnemos settings {get,set,unset,list}`.** First setting: `reranker_model`. A multilingual store had no way to declare that it needs a multilingual reranker; correctness depended on `MNEMOS_RERANKER_MODEL` reaching every launch context separately (unit files, cron, hooks, ad-hoc shells), which is the exact env-drift trap the docs warn about for `MNEMOS_NAMESPACE` and that the embedder escaped in 10.30.0 by making the store self-describing (field report). The declaration is adopted at store open, reaches every context that opens the store, and explicit env still overrides it, per field: an exported value is an instruction, a default is a seed. doctor reports an active adoption, and the language warnings now point at `mnemos settings set reranker_model ...` as the permanent fix instead of the env-var treadmill.
+- The reranker deliberately does NOT auto-pin the way the embedder does: a reranker upgrade should reach stores that never declared a preference, and only stores with a declared need resist the default.
+
+3 new tests. 393 pass.
 ## [10.34.2] - 2026-08-19 (tier-2 provenance check; repair respects the lock)
 
 ### Fixed

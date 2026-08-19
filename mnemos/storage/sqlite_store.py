@@ -158,6 +158,13 @@ def _ensure_vec_db(path, dims=FASTEMBED_DIMS):
     sqlite_vec.load(conn)
     conn.execute(f"CREATE VIRTUAL TABLE IF NOT EXISTS embed_vec USING vec0(embedding float[{dims}])")
     conn.execute("""
+        CREATE TABLE IF NOT EXISTS store_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+        )
+    """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS embed_meta (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             source_db TEXT NOT NULL,
@@ -227,6 +234,7 @@ class SQLiteStore(MnemosStore):
         # vectors were actually built with.
         self._embed_adopted = False
         self._embed_adoption: dict = {}
+        self._reranker_adoption = None
 
     # --- Connection management ---
 
@@ -282,6 +290,20 @@ class SQLiteStore(MnemosStore):
             # width, so a default flip cannot leave new inserts rejected
             # against an old-geometry index. Doctor reports the ambiguity.
             self._embed_adoption = adopt_store_config(model_id, dims)
+            # Store-declared reranker (v10.35.0): a multilingual store gets
+            # to say it needs a multilingual reranker, instead of correctness
+            # depending on an env var reaching every launch context. Same
+            # drift trap the namespace docs warn about and the embedder
+            # solved by self-description. Explicit env still wins.
+            try:
+                from .. import constants as _consts
+                declared = self.get_store_setting("reranker_model")
+                if declared and not _consts.RERANKER_EXPLICIT \
+                        and declared != _consts.RERANKER_MODEL:
+                    self._reranker_adoption = (_consts.RERANKER_MODEL, declared)
+                    _consts.RERANKER_MODEL = declared
+            except Exception:
+                pass
         except Exception:
             # A store too broken to report its own provenance is doctor's
             # problem, not a reason to refuse to open it.
@@ -1889,6 +1911,26 @@ class SQLiteStore(MnemosStore):
         return repaired
 
     # --- Vector provenance ---
+
+    def get_store_setting(self, key):
+        conn = self._get_conn()
+        try:
+            row = conn.execute(
+                "SELECT value FROM store_settings WHERE key = ?", (key,)).fetchone()
+            return row["value"] if row else None
+        except Exception:
+            return None
+
+    def set_store_setting(self, key, value):
+        conn = self._get_conn()
+        if value is None:
+            conn.execute("DELETE FROM store_settings WHERE key = ?", (key,))
+        else:
+            conn.execute(
+                "INSERT INTO store_settings (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value, "
+                "updated_at = datetime('now', 'localtime')", (key, value))
+        conn.commit()
 
     def get_arch_provenance_mismatch(self, current_model_id):
         """Count tier-2 vectors whose recorded model differs from current."""

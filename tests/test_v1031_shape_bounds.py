@@ -209,7 +209,7 @@ def test_register_if_custom_adds_unknown_model(monkeypatch):
         def add_custom_model(**kw):
             calls.update(kw)
 
-    monkeypatch.setattr(r, "RERANKER_MODEL", "acme/unknown-reranker-9000")
+    monkeypatch.setattr(r._c, "RERANKER_MODEL", "acme/unknown-reranker-9000")
     r._register_if_custom(FakeTCE)
     assert calls["model"] == "acme/unknown-reranker-9000"
     assert calls["model_file"] == "onnx/model.onnx"
@@ -224,7 +224,7 @@ def test_register_if_custom_is_noop_for_catalogue_models(monkeypatch):
         def add_custom_model(**kw):
             raise ValueError("Model x is already registered in CrossEncoderModel")
 
-    monkeypatch.setattr(r, "RERANKER_MODEL", "jinaai/jina-reranker-v2-base-multilingual")
+    monkeypatch.setattr(r._c, "RERANKER_MODEL", "jinaai/jina-reranker-v2-base-multilingual")
     r._register_if_custom(FakeTCE)   # must not raise
 
 
@@ -237,7 +237,7 @@ def test_register_if_custom_reraises_other_valueerrors(monkeypatch):
         def add_custom_model(**kw):
             raise ValueError("something else entirely")
 
-    monkeypatch.setattr(r, "RERANKER_MODEL", "x/y")
+    monkeypatch.setattr(r._c, "RERANKER_MODEL", "x/y")
     with pytest.raises(ValueError):
         r._register_if_custom(FakeTCE)
 

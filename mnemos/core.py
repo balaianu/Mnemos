@@ -160,10 +160,11 @@ class Mnemos:
                 result["warning"] = (
                     "this memory contains non-English content and the "
                     "configured reranker is English-only (the embedder is "
-                    "multilingual). Non-English scoring is degraded; set "
-                    "MNEMOS_RERANKER_MODEL="
-                    "jinaai/jina-reranker-v2-base-multilingual to restore "
-                    "the multilingual tier. No re-embed needed."
+                    "multilingual). Non-English scoring is degraded; run "
+                    "`mnemos settings set reranker_model "
+                    "jinaai/jina-reranker-v2-base-multilingual` so the store "
+                    "itself declares it, reaching every launch context. No "
+                    "re-embed needed."
                 )
             else:
                 result["warning"] = (
@@ -1906,6 +1907,17 @@ class Mnemos:
         except Exception as e:
             report["issues"].append(f"Mojibake check failed: {e}")
 
+        # --- Store-declared reranker ---
+        try:
+            adopted_rr = getattr(self.store, "_reranker_adoption", None)
+            if adopted_rr:
+                report["checks"].append(
+                    f"Reranker: store declares '{adopted_rr[1]}' "
+                    f"(default would be '{adopted_rr[0]}'); adopted. "
+                    "Explicit MNEMOS_RERANKER_MODEL env overrides.")
+        except Exception as e:
+            report["issues"].append(f"Reranker declaration check failed: {e}")
+
         # --- Language coverage ---
         # An English-only model pair on a non-English store fails silently:
         # nothing errors, retrieval is just quietly mediocre. Same failure
@@ -1943,10 +1955,11 @@ class Mnemos:
                            "jinaai/jina-reranker-v2-base-multilingual) or the "
                            "mixed tier (English embedder + multilingual "
                            "reranker)." if both else
-                           ("Non-English scoring is degraded; set "
-                            "MNEMOS_RERANKER_MODEL="
-                            "jinaai/jina-reranker-v2-base-multilingual "
-                            "(no re-embed needed)." if rr_en else
+                           ("Non-English scoring is degraded; run "
+                            "`mnemos settings set reranker_model "
+                            "jinaai/jina-reranker-v2-base-multilingual` "
+                            "so the store itself declares it, reaching every "
+                            "launch context (no re-embed needed)." if rr_en else
                             "FTS and the multilingual reranker still cover "
                             "it; workable for a mixed store, not for a "
                             "predominantly non-English one."))

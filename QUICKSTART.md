@@ -13,7 +13,7 @@ python3 -m venv venv && source venv/bin/activate
 pip install -e .
 ```
 
-Python 3.11+ required. CPU-only, no GPU. First `mnemos` invocation downloads the embedding model (e5-large, ~1 GB) into `~/.cache/fastembed/`.
+Python 3.11+ required. CPU-only, no GPU. First `mnemos` invocation downloads the default models (bge-small embedder + gte-modernbert reranker, ~650 MB) into `~/.cache/fastembed/`.
 
 ## Register with your AI client
 

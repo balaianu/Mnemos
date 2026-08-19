@@ -321,7 +321,8 @@ def _maybe_warmup(mnemos):
     try:
         from .embed import embed
         embed(["warmup"], prefix="query")
-        sys.stderr.write("Mnemos: e5-large model loaded\n")
+        from .embed import embed_model_id
+        sys.stderr.write(f"Mnemos: embedder loaded: {embed_model_id()}\n")
         sys.stderr.flush()
     except Exception as e:
         sys.stderr.write(f"Mnemos: embedder warmup failed: {e}\n")
@@ -330,7 +331,8 @@ def _maybe_warmup(mnemos):
         try:
             from .rerank import rerank
             rerank("warmup", [{"id": 0, "text": "warmup document"}])
-            sys.stderr.write("Mnemos: jina reranker loaded\n")
+            from .constants import RERANKER_MODEL
+            sys.stderr.write(f"Mnemos: reranker loaded: {RERANKER_MODEL}\n")
             sys.stderr.flush()
         except Exception as e:
             sys.stderr.write(f"Mnemos: reranker warmup failed: {e}\n")

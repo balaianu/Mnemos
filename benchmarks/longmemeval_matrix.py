@@ -111,9 +111,9 @@ def main():
     if args.tempdb:
         lmb.TEMP_DB = args.tempdb
 
-    # Rerankers outside fastembed's six have to be registered before the
-    # encoder is constructed. Bench tooling only: the package deliberately
-    # does not reach outside the catalogue on its own.
+    # Rerankers outside fastembed's catalogue have to be registered before
+    # the encoder is constructed. Since v10.33.0 the package does this itself
+    # for MNEMOS_RERANKER_MODEL; this hook remains for ad-hoc bench overrides.
     custom = os.environ.get("MNEMOS_RERANKER_CUSTOM_HF")
     if custom:
         from fastembed.rerank.cross_encoder import TextCrossEncoder

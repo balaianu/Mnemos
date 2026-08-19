@@ -35,9 +35,10 @@ def _reload_with(monkeypatch, **env):
 
 # --- dims are configurable ------------------------------------------------
 
-def test_dims_default_is_1024(monkeypatch):
+def test_dims_default_is_384(monkeypatch):
+    """Light-tier default since v10.33.0 (bge-small)."""
     c = _reload_with(monkeypatch, MNEMOS_EMBED_DIMS=None)
-    assert c.FASTEMBED_DIMS == 1024
+    assert c.FASTEMBED_DIMS == 384
 
 
 def test_dims_follow_env(monkeypatch):
@@ -75,9 +76,9 @@ def test_check_dims_raises_with_actionable_message(monkeypatch):
     importlib.reload(e)
     e._dims_checked = False
     with pytest.raises(ValueError) as excinfo:
-        e._check_dims(384)
+        e._check_dims(1024)   # any width other than the configured default
     msg = str(excinfo.value)
-    assert "MNEMOS_EMBED_DIMS=384" in msg
+    assert "MNEMOS_EMBED_DIMS=1024" in msg
     assert "reembed" in msg or "embed-fill" in msg
 
 
@@ -85,9 +86,9 @@ def test_check_dims_runs_once(monkeypatch):
     import mnemos.embed as e
     importlib.reload(e)
     e._dims_checked = False
-    e._check_dims(e.FASTEMBED_DIMS)
+    e._check_dims(e.effective_dims())
     # Already satisfied once; a later bad value is not re-litigated per call.
-    e._check_dims(384)
+    e._check_dims(1024)
 
 
 # --- the index width is readable and rebuildable --------------------------
@@ -100,8 +101,8 @@ def test_get_vec_dims_reads_declared_width(tmp_path):
 
 def test_reset_vec_index_changes_width(tmp_path):
     m = _mnemos(tmp_path)
-    m.store.reset_vec_index(384)
-    assert m.store.get_vec_dims() == 384
+    m.store.reset_vec_index(1024)
+    assert m.store.get_vec_dims() == 1024
 
 
 def test_reset_vec_index_clears_active_meta_only(tmp_path):
@@ -123,7 +124,7 @@ def test_reset_vec_index_clears_active_meta_only(tmp_path):
 
 def test_doctor_flags_dimension_mismatch(tmp_path):
     m = _mnemos(tmp_path)
-    m.store.reset_vec_index(384)
+    m.store.reset_vec_index(1024)   # anything other than the default width
     report = m.doctor()
     assert any("dimension mismatch" in i.lower() for i in report["issues"])
     assert any("reembed" in i for i in report["issues"])
@@ -171,22 +172,15 @@ def test_reset_arch_index_changes_width_and_clears_meta(tmp_path):
 
 
 def test_doctor_flags_stranded_archived_index(tmp_path):
-    """The field case: active index rebuilt at 384, archived left at 1024,
-    doctor reported complete because it only counted missing rows."""
+    """The field case, widths updated for the 384 default: active index
+    rebuilt at the effective width, archived index left at a different one,
+    doctor used to report complete because it only counted missing rows."""
     m = _mnemos(tmp_path)
-    m.store.reset_vec_index(384)
-    import os
-    os.environ["MNEMOS_EMBED_DIMS"] = "384"
-    import importlib
-    import mnemos.constants, mnemos.embed
-    importlib.reload(mnemos.constants); importlib.reload(mnemos.embed)
-    try:
-        report = m.doctor()
-        assert any("Archived vector index" in i and "reindex-archived" in i
-                   for i in report["issues"])
-    finally:
-        del os.environ["MNEMOS_EMBED_DIMS"]
-        importlib.reload(mnemos.constants); importlib.reload(mnemos.embed)
+    # Strand the ARCHIVED index at a foreign width; active stays at default.
+    m.store.reset_arch_vec_index(1024)
+    report = m.doctor()
+    assert any("Archived vector index" in i and "reindex-archived" in i
+               for i in report["issues"])
 
 
 def test_doctor_dim_check_respects_pinning(tmp_path):
@@ -195,13 +189,17 @@ def test_doctor_dim_check_respects_pinning(tmp_path):
     'vectors are being rejected' issue while inserts succeeded."""
     m = _mnemos(tmp_path)
     from mnemos import embed as e
-    # Simulate a store pinned to bge/384 while the default remains e5/1024.
-    m.store.reset_vec_index(384)
-    changed = e.adopt_store_config("BAAI/bge-small-en-v1.5", 384)
+    # Simulate a store pinned to e5/1024 while the default is bge/384: the
+    # exact shape every pre-flip store is in after upgrading to v10.33.0.
+    m.store.reset_vec_index(1024)
+    m.store.reset_arch_vec_index(1024)
+    changed = e.adopt_store_config("intfloat/multilingual-e5-large+cmlnorm", 1024)
     assert changed, "pin must take effect for the scenario to be real"
     try:
         report = m.doctor()
         assert not any("dimension mismatch" in i.lower()
                        for i in report["issues"])
     finally:
-        e.adopt_store_config("intfloat/multilingual-e5-large+cmlnorm", 1024)
+        from mnemos.constants import FASTEMBED_DIMS
+        from mnemos.embed import embed_model_id
+        e.adopt_store_config(embed_model_id(), FASTEMBED_DIMS)

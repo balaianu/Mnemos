@@ -28,7 +28,7 @@ claude mcp add -s user mnemos $(pwd)/venv/bin/mnemos serve
 codex mcp add mnemos -- $(pwd)/venv/bin/mnemos-mcp
 ```
 
-**First run downloads ~800 MB of ONNX models** (FastEmbed `multilingual-e5-large` embedder + Jina Reranker v2) into `~/.cache/fastembed/`. One-time cost, no GPU, no API key. Subsequent runs are offline.
+**First run downloads ~650 MB of ONNX models** (the default light tier: `bge-small` embedder + `gte-modernbert` reranker) into `~/.cache/fastembed/`. One-time cost, no GPU, no API key. Subsequent runs are offline. Non-English or mixed-language stores should use the multilingual tier (`e5-large` + `jina-v2`, ~3.3 GB); it is two environment variables away and Mnemos detects and warns when stored content needs it. See the model-tier table in [docs/usage.md](docs/usage.md).
 
 **Add the agent instructions to your AI client.** Having the MCP tools available is not enough; the agent needs to be told *when* to search, *when* to store, and *what format* to use. Copy the ready-made block from [docs/agent-instructions.md](docs/agent-instructions.md) into your `~/.claude/CLAUDE.md` (Claude Code), `AGENTS.md` (Codex), `.cursorrules` (Cursor), or your Claude Desktop custom instructions. Without this, the model has the tools but will not use them proactively.
 
@@ -106,9 +106,9 @@ That is the entire surface: CRUD-plus-search on the hot path, pattern rewrite an
               ┌───────────────────┼───────────────────┐
               │                   │                   │
         ┌─────▼─────┐      ┌──────▼──────┐    ┌──────▼──────┐
-        │   FTS5    │      │   sqlite-   │    │    Jina     │
-        │  BM25     │      │     vec     │    │   Reranker  │
-        │ (lexical) │      │  (vectors)  │    │   (Jina v2) │
+        │   FTS5    │      │   sqlite-   │    │   Cross-    │
+        │  BM25     │      │     vec     │    │   Encoder   │
+        │ (lexical) │      │  (vectors)  │    │ (reranker)  │
         └─────┬─────┘      └──────┬──────┘    └──────┬──────┘
               │                   │                   │
               └─────► RRF Merge ◄─┘                   │
@@ -131,7 +131,7 @@ That is the entire surface: CRUD-plus-search on the hot path, pattern rewrite an
 
 Search asks "what is relevant?" (lexical + semantic + topicality). The store decision asks "is this the same claim, or the opposite claim?", which is an entailment question, so it runs on NLI models rather than the reranker. English content routes to an English checkpoint, everything else to a multilingual one.
 
-On the default SQLite backend, everything (content, FTS index, 1024-dim vectors, memory links, Nyx consolidation history) lives in one SQLite file and every write is a single atomic transaction. Full layered architecture, data model schema, retrieval pipeline mechanics, and storage-backend tradeoffs in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Feature reference (hybrid pipeline, model rationale, temporal decay, Nyx phases, contradiction detection, auto-widen, dedup, forgetting) in [docs/features.md](docs/features.md).
+On the default SQLite backend, everything (content, FTS index, vectors at the configured width (384-dim default tier, 1024-dim multilingual), memory links, Nyx consolidation history) lives in one SQLite file and every write is a single atomic transaction. Full layered architecture, data model schema, retrieval pipeline mechanics, and storage-backend tradeoffs in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Feature reference (hybrid pipeline, model rationale, temporal decay, Nyx phases, contradiction detection, auto-widen, dedup, forgetting) in [docs/features.md](docs/features.md).
 
 ## Deployment profiles
 
@@ -148,7 +148,7 @@ export MNEMOS_MODEL_IDLE_TTL=1800  # unload models after 30 min idle, reclaim RA
 export MNEMOS_MIN_FREE_MB=500      # degrade to lighter search instead of OOM
 ```
 
-- **Models loaded**: FastEmbed e5-large only (~600 MB; drops to ~250 MB with `int8` variants)
+- **Models loaded**: the embedder only (default tier: bge-small, ~150 MB resident; multilingual tier: e5-large, ~600 MB)
 - **Search**: FTS5 + vec + RRF merge, no cross-encoder rerank
 - **Contradiction detection**: Tier-1 vec gate only; any close pair flagged as `contradicts`
 - **Nyx consolidation**: the full zero-LLM nightly tier runs (triage, candidacy, mechanical line-union merges, contradiction bookkeeping); the weekly LLM tier is skipped. The NLI cluster gate/finder engage only if the `mnemos[nli]` extra is installed, else the tier falls back to vec-gated candidacy
@@ -161,7 +161,7 @@ export MNEMOS_MIN_FREE_MB=500      # degrade to lighter search instead of OOM
 # Default config - no env vars needed
 ```
 
-- **Models loaded**: FastEmbed e5-large (~600 MB) + Jina cross-encoder (~500 MB)
+- **Models loaded**: embedder + cross-encoder reranker (default tier ~0.5 GB resident; multilingual tier ~1.1 GB)
 - **Search**: full hybrid pipeline (FTS5 + vec + RRF + rerank), this is what the 98.1% R@5 benchmark runs on
 - **Contradiction detection**: three-tier with `relates` silent-link zone, no API cost per store
 - **Nyx consolidation**: the zero-LLM nightly tier runs in full (NLI cluster gate + mechanical line-union merges + contradiction detection); the weekly LLM tier (weave/generative-merge/synthesis) stays dormant until an endpoint is added
@@ -177,7 +177,7 @@ export MNEMOS_RETRIEVAL_LOG=1        # optional: real-query analytics
 export MNEMOS_TOOL_USAGE_LOG=1       # optional: MCP call diagnostics
 ```
 
-- **Models loaded**: e5-large + Jina + LLM API (no local LLM weights)
+- **Models loaded**: embedder + reranker + LLM API (no local LLM weights)
 - **Search**: full hybrid pipeline (unchanged from standard profile)
 - **Contradiction detection**: five-way LLM classification - `contradicts`, `refines`, `evolves`, `relates`, `unrelated`
 - **Nyx consolidation**: both tiers run on schedule - the zero-LLM nightly tier plus the weekly LLM tier (weave/generative-merge/synthesize) build a model of the user over time
@@ -225,7 +225,7 @@ MIT: see [LICENSE](LICENSE).
 ## Credits
 
 Built on top of:
-- [FastEmbed](https://github.com/qdrant/fastembed): multilingual e5-large ONNX embeddings
+- [FastEmbed](https://github.com/qdrant/fastembed): ONNX embedding and reranking runtime (bge-small default; multilingual e5-large tier)
 - [sqlite-vec](https://github.com/asg017/sqlite-vec): vector search in SQLite
-- [Jina Reranker v2](https://huggingface.co/jinaai/jina-reranker-v2-base-multilingual): cross-encoder
+- [gte-modernbert reranker](https://huggingface.co/Alibaba-NLP/gte-reranker-modernbert-base) (default) and [Jina Reranker v2](https://huggingface.co/jinaai/jina-reranker-v2-base-multilingual) (multilingual tier): cross-encoders
 - [LongMemEval](https://github.com/xiaowu0162/LongMemEval): benchmark dataset

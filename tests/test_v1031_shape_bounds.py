@@ -89,7 +89,7 @@ def test_defaults_are_bounded_not_fastembed_defaults(monkeypatch):
     assert c.EMBED_BATCH < 256          # fastembed default
     # The token pin is the real sequence bound; the char clip is a superseded
     # escape hatch and defaults off.
-    assert 0 < c.RERANK_MAX_TOKENS <= 1024   # Jina v2 model_max_length
+    assert 0 < c.RERANK_MAX_TOKENS <= 1024   # a sane pin; gte allows 8192, jina caps at 1024
     assert c.RERANK_MAX_CHARS == 0
 
 
@@ -195,3 +195,82 @@ def test_reaper_ticks_nli_too():
     import mnemos._resource as res
     src = inspect.getsource(res.start_idle_reaper)
     assert "_nli_mod.maybe_unload()" in src
+
+
+# --- custom reranker registration (v10.33.0) --------------------------------
+
+def test_register_if_custom_adds_unknown_model(monkeypatch):
+    import mnemos.rerank as r
+    importlib.reload(r)
+    calls = {}
+
+    class FakeTCE:
+        @staticmethod
+        def add_custom_model(**kw):
+            calls.update(kw)
+
+    monkeypatch.setattr(r, "RERANKER_MODEL", "acme/unknown-reranker-9000")
+    r._register_if_custom(FakeTCE)
+    assert calls["model"] == "acme/unknown-reranker-9000"
+    assert calls["model_file"] == "onnx/model.onnx"
+
+
+def test_register_if_custom_is_noop_for_catalogue_models(monkeypatch):
+    import mnemos.rerank as r
+    importlib.reload(r)
+
+    class FakeTCE:
+        @staticmethod
+        def add_custom_model(**kw):
+            raise ValueError("Model x is already registered in CrossEncoderModel")
+
+    monkeypatch.setattr(r, "RERANKER_MODEL", "jinaai/jina-reranker-v2-base-multilingual")
+    r._register_if_custom(FakeTCE)   # must not raise
+
+
+def test_register_if_custom_reraises_other_valueerrors(monkeypatch):
+    import mnemos.rerank as r
+    importlib.reload(r)
+
+    class FakeTCE:
+        @staticmethod
+        def add_custom_model(**kw):
+            raise ValueError("something else entirely")
+
+    monkeypatch.setattr(r, "RERANKER_MODEL", "x/y")
+    with pytest.raises(ValueError):
+        r._register_if_custom(FakeTCE)
+
+
+# --- the probe catches byte-BPE mojibake (v10.33.0) --------------------------
+
+def test_probe_flags_byte_fallback_fragmentation():
+    """gte-modernbert never emits [UNK]: operators fragment into UTF-8 byte
+    mojibake instead. A model represents an operator only if some produced
+    piece still contains the character."""
+    import mnemos.rerank as r
+
+    class MojibakeEnc:
+        def __init__(self, toks): self._t = toks
+        def encode(self, sym, add_special_tokens=False):
+            class E: tokens = self._t
+            return E()
+
+    class Enc:
+        class model:
+            tokenizer = MojibakeEnc(["â", "ľĵ"])   # byte pieces
+    assert r._probe_cml_support(Enc) is True
+
+    class Enc2:
+        class model:
+            tokenizer = None
+        def __init__(self): pass
+    # a tokenizer whose pieces contain the real symbol is judged native
+    class NativeEnc:
+        class model:
+            class tokenizer:
+                @staticmethod
+                def encode(sym, add_special_tokens=False):
+                    class E: tokens = ["▁", sym]
+                    return E()
+    assert r._probe_cml_support(NativeEnc) is False

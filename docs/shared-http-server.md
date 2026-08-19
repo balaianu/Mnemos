@@ -3,8 +3,8 @@
 ## Why
 
 Every MCP client that spawns `mnemos-mcp` over stdio gets a private process,
-and each private process loads its own copy of the ONNX models (e5-large
-embedder, Jina reranker, optional NLI). The model files on disk are shared
+and each private process loads its own copy of the ONNX models (embedder,
+reranker, optional NLI). The model files on disk are shared
 page cache, but ONNX Runtime copies weights into anonymous private heap per
 process, and the ORT CPU arena grows with use. Three harnesses on one machine
 means three multi-GB copies of the same weights.

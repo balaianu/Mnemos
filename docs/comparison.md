@@ -11,7 +11,7 @@ I am comparing against MemPalace specifically because they are, by their own acc
 |                              | MemPalace | **Mnemos** |
 |---|---|---|
 | Storage backend              | ChromaDB only | **SQLite (default), Qdrant, Postgres-ready** |
-| Vector search                | ChromaDB defaults | **FastEmbed e5-large (1024-dim, ONNX)** |
+| Vector search                | ChromaDB defaults | **FastEmbed ONNX (e5-large in the benchmarked configuration; bge-small default since v10.33.0, measured equivalent with the reranker)** |
 | Lexical search (BM25)        | None | **FTS5 with stemming + AND/OR fallback** |
 | Hybrid retrieval             | None | **RRF fusion (k=60)** |
 | Cross-encoder reranking      | None | **Jina Reranker v2 multilingual** |

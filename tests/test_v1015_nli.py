@@ -15,7 +15,7 @@ import mnemos.nli as nli
 from mnemos.core import Mnemos
 from mnemos.storage.sqlite_store import SQLiteStore
 
-DIMS = 1024
+from mnemos.constants import FASTEMBED_DIMS as DIMS
 
 
 def _store(tmp_path, name="m.db"):

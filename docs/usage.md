@@ -6,7 +6,7 @@
 
 ### Requirements
 - Python 3.11+
-- ~500MB disk for FastEmbed model + Jina reranker (auto-downloaded on first use)
+- ~650MB disk for the default tier's embedder + reranker (auto-downloaded on first use; multilingual tier ~3.3GB)
 - **No GPU required**: everything runs on CPU via ONNX
 
 ### Setup
@@ -216,10 +216,10 @@ The retrieval pipeline is identical across backends; only the vector index locat
 
 Mnemos is CPU-only but loads real ONNX models into RAM. Summary:
 
-- **With reranker (default):** ~1.5-1.7 GB resident. Canonical configuration, benchmark numbers reported on this.
+- **With reranker (default tier):** ~0.5-0.7 GB resident (multilingual tier: ~1.5-1.7 GB). Canonical configuration, benchmark numbers reported on this.
 - **Without reranker (`MNEMOS_ENABLE_RERANK=0`):** ~1-1.2 GB resident. Runs on a 2 GB+ Raspberry Pi. Trades ~0.5 pp of R@5 for ~500 MB less RAM.
 - **Idle unload (`MNEMOS_MODEL_IDLE_TTL=<seconds>`, v10.5.0):** a background reaper drops the embedder and reranker after they sit idle that long and returns the resident RAM above to the OS, so a mostly-idle server falls back toward ~100 MB between queries instead of holding the model indefinitely. The next query reloads (a one-off cost, roughly 1-2 s on a fast CPU, more on small hardware). Pair with `MNEMOS_EAGER_WARMUP=0` to also skip the startup load, and `MNEMOS_MIN_FREE_MB=<floor>` to refuse loading under memory pressure (search degrades to vec-only then FTS5 instead of risking an OOM). All default off.
-- **Disk:** ~800 MB total for both ONNX models (e5-large embedder + Jina cross-encoder), downloaded once on first use and cached under `~/.cache/fastembed`.
+- **Disk:** ~650 MB for the default tier's two ONNX models (multilingual tier ~3.3 GB), downloaded once on first use and cached under `~/.cache/fastembed`.
 - **With the NLI decision layer (optional, v10.15+):** the exported NLI models add ~1.9 GB disk (`~/.cache/mnemos/nli-onnx`) and, once a store operation first needs them, ~0.7 GB (English model) to ~1.8 GB (both models) resident on top of the numbers above. They load lazily and independently; an English-primary store may never load the multilingual one. This is the deliberate trade behind the whole design: every decision that CAN be a local discriminative scorer instead of an LLM call is one, and the currency paid is RAM, the resource a self-hosted box usually has spare. What it buys is determinism, millisecond-class latency, and zero API calls or keys anywhere in the store/search path.
 ## Model tiers and switching
 
@@ -227,18 +227,20 @@ Three measured configurations (LongMemEval stratified subset, R@1 with reranker;
 
 | tier | embedder | reranker | disk | when |
 |---|---|---|---|---|
-| default | `BAAI/bge-small-en-v1.5` | `Alibaba-NLP/gte-reranker-modernbert-base` | ~0.65 GB | English-only stores |
+| **default** (since v10.33.0) | `BAAI/bge-small-en-v1.5` | `Alibaba-NLP/gte-reranker-modernbert-base` | ~0.65 GB | English-only stores |
 | multilingual | `intfloat/multilingual-e5-large` | `jinaai/jina-reranker-v2-base-multilingual` | 3.35 GB | genuinely non-English content; there is currently no smaller combination that works |
 | mixed | `BAAI/bge-small-en-v1.5` | `jinaai/jina-reranker-v2-base-multilingual` | 1.18 GB | English-primary stores with non-English terms of art |
 
 Two rules make switching safe:
 
 - **Changing the embedder requires a full re-embed.** Stored vectors are only meaningful under the model that produced them. Export `MNEMOS_EMBED_MODEL` and `MNEMOS_EMBED_DIMS`, then run `mnemos reembed` (it takes a backup first). Until you do, a populated store PINS itself to the model its vectors were built with, so upgrading Mnemos never silently reinterprets an existing index.
-- **Changing the reranker requires nothing.** It reads text at query time and touches no stored data; swap it freely with `MNEMOS_RERANKER_MODEL`.
+- **Changing the reranker requires nothing.** It reads text at query time and touches no stored data; swap it freely with `MNEMOS_RERANKER_MODEL`. The flip side: because it is not store-pinned, a DEFAULT reranker change does reach existing installs on restart, which is why multilingual deployments should set `MNEMOS_RERANKER_MODEL` explicitly rather than rely on the default.
+
+CML operator mapping applies to EVERY embedder, on by default: the relational symbols (`✓ ✗ ∵` and friends) are spelled out as words on the scoring copy before embedding, because they sit outside English model vocabularies entirely and are vanishingly rare even for multilingual ones. The reranker receives the same mapping automatically when a per-model probe finds its tokenizer cannot represent the operators. Stored content is never modified.
 
 `mnemos doctor` reports which model a store is pinned to, and warns when substantial non-English content coexists with English-only models (that combination degrades quietly rather than failing loudly, which is why it is checked).
 
-- **Sub-1 GB hardware:** not designed for it out of the box. Swap to a smaller embedder (e.g. `BAAI/bge-small-en-v1.5`) via `MNEMOS_EMBED_MODEL` if you truly need 512 MB total; retrieval quality drops but Mnemos still runs. Set `MNEMOS_EMBED_DIMS` to match the model (bge-small 384, bge-base 768, e5-large 1024) and run `mnemos reembed` on an existing store: the vector index is created at a fixed width, and until it is rebuilt every insert at the new width is rejected. `mnemos doctor` reports the mismatch if you forget. Leave the NLI layer off on such hardware; the legacy scorers cover dedup/contradiction with no extra models.
+- **Sub-1 GB hardware:** the default tier already fits. For 512 MB devices, additionally disable the reranker (`MNEMOS_ENABLE_RERANK=0`; R@1 cost is real, see docs/cml.md) and leave the NLI layer off. When switching embedders on an existing store, export `MNEMOS_EMBED_MODEL` and `MNEMOS_EMBED_DIMS` and run `mnemos reembed`: the vector index is created at a fixed width, and until it is rebuilt every insert at the new width is rejected. `mnemos doctor` reports the mismatch if you forget.
 
 Full per-component breakdown (Python + Mnemos, SQLite + sqlite-vec, embedder, reranker) and sub-1 GB configuration notes in [`ARCHITECTURE.md#ram-and-disk-footprint`](ARCHITECTURE.md#ram-and-disk-footprint).
 

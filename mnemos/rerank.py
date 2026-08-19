@@ -6,6 +6,7 @@ high-precision reranking after first-stage hybrid retrieval. ~50ms per
 batch of 20 documents on CPU.
 """
 
+import os
 import threading
 import time
 
@@ -18,6 +19,37 @@ _last_used = 0.0
 # Resolved once at load: does THIS reranker's tokenizer lose CML operators?
 _needs_cml_map = False
 _lock = threading.Lock()
+
+
+def _register_if_custom(TextCrossEncoder):
+    """Register RERANKER_MODEL with fastembed when it is not in the catalogue.
+
+    The default reranker (gte-modernbert, since v10.33.0) is not among
+    fastembed's built-ins, and neither is whatever a user points
+    MNEMOS_RERANKER_MODEL at. add_custom_model refuses names it already
+    knows, so this is a no-op for catalogue models and idempotent for
+    custom ones.
+    """
+    try:
+        from fastembed.common.model_description import ModelSource
+        TextCrossEncoder.add_custom_model(
+            model=RERANKER_MODEL,
+            sources=ModelSource(hf=RERANKER_MODEL),
+            model_file=os.environ.get("MNEMOS_RERANKER_MODEL_FILE",
+                                      "onnx/model.onnx"),
+            description="registered by mnemos", license="unknown",
+            size_in_gb=0.0)
+    except ValueError as e:
+        if "already registered" not in str(e):
+            raise
+    except ImportError as e:
+        # If fastembed moves ModelSource, silently skipping registration
+        # would surface later as an unexplained "model is not supported";
+        # name the actual failure instead.
+        import sys
+        print(f"Mnemos: could not register custom reranker "
+              f"{RERANKER_MODEL} with fastembed ({e}); the load will fail "
+              "if the model is not in fastembed's catalogue", file=sys.stderr)
 
 
 def _probe_cml_support(encoder):
@@ -43,8 +75,17 @@ def _probe_cml_support(encoder):
         for sym in CML_EMBED_MAP:
             if sym.isspace():
                 continue
-            toks = tok.encode(sym, add_special_tokens=False).tokens
+            toks = [t for t in tok.encode(sym, add_special_tokens=False).tokens
+                    if t not in ("[PAD]", "<pad>")]
             if any(t in ("[UNK]", "<unk>") for t in toks):
+                return True
+            # Byte-fallback BPE (gte-modernbert and friends) never produces
+            # [UNK]: the symbol fragments into UTF-8 byte pieces instead
+            # ('\u2713' becomes 'a-circumflex' mojibake). A model represents
+            # the operator only if some produced piece still CONTAINS the
+            # character; sentencepiece markers are stripped before checking.
+            if not any(sym in t.replace("\u2581", "").replace("\u0120", "")
+                       for t in toks):
                 return True
         return False
     except Exception:
@@ -91,7 +132,14 @@ def _get_reranker():
         if _instance is None:
             _resource.guard_memory()
             try:
+                # Heal orphaned download artifacts on THIS path too: the
+                # embed-side healer (10.30.1) only runs as a side effect
+                # when a fresh process embeds first, and a long-lived server
+                # that already holds the embedder never does.
+                from .embed import _clean_broken_cache
+                _clean_broken_cache()
                 from fastembed.rerank.cross_encoder import TextCrossEncoder
+                _register_if_custom(TextCrossEncoder)
                 kwargs = {
                     "model_name": RERANKER_MODEL,
                     "cache_dir": FASTEMBED_CACHE,
@@ -163,6 +211,10 @@ def rerank(query: str, documents: list) -> list:
         if _needs_cml_map:
             from .embed import apply_cml_map
             prep = lambda t: _clip(apply_cml_map(t))
+            # The query gets the same treatment: a cross-encoder scores the
+            # PAIR, and a mapped document against an unmapped query would
+            # reintroduce the mismatch one level up.
+            query = apply_cml_map(query)
         texts = [prep(d.get("text", "")) for d in documents]
         scores = list(model.rerank(query, texts, batch_size=RERANK_BATCH))
     except Exception as e:

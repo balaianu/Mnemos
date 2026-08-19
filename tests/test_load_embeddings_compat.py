@@ -11,6 +11,7 @@ v7/v8 explicit-id era, so this branch was untested until now.
 import pytest
 
 from mnemos.core import Mnemos
+from mnemos.constants import FASTEMBED_DIMS
 from mnemos.storage.sqlite_store import SQLiteStore
 from mnemos.consolidation.phases import load_embeddings, _vec_join_col
 
@@ -43,4 +44,4 @@ def test_load_embeddings_on_rowid_schema(m):
     assert len(embeddings) == stored
     assert len(mem_by_id) == stored
     for vec in embeddings.values():
-        assert vec.shape[0] == 1024
+        assert vec.shape[0] == FASTEMBED_DIMS

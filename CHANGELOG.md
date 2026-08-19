@@ -4,6 +4,33 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.33.0] - 2026-08-19 (the light tier becomes the default)
+
+The change issue #4 asked for, shipped with everything the benchmarks said it needs. Two operator notes up front:
+
+- **A bare `mnemos reembed` on an existing store rebuilds IN PLACE under the store's pinned model.** To migrate to the new default, export `MNEMOS_EMBED_MODEL=BAAI/bge-small-en-v1.5 MNEMOS_EMBED_DIMS=384` first. Existing stores are otherwise untouched: they pin to the model their vectors were built with.
+- **Rerankers are NOT store-pinned** (they touch no stored data, which cuts both ways): the default reranker change reaches every install on its next restart. Multilingual deployments must set `MNEMOS_RERANKER_MODEL=jinaai/jina-reranker-v2-base-multilingual` on their unit, and Mnemos now warns at store time, server startup and in doctor when non-English content meets an English-only reranker.
+
+### Changed
+- **Defaults: `BAAI/bge-small-en-v1.5` (384-dim) + `Alibaba-NLP/gte-reranker-modernbert-base` (149M).** Measured basis, LongMemEval stratified subset: bge-small R@1 92.40 equals bge-base 92.40 and e5-large 92.01 (reweighted) WITH a reranker in the pipeline; without one, e5 is clearly better (88.43 vs 81.29), so the small embedder is only free because the reranker stays. gte-modernbert beats jina-v2 on the discriminating categories (preference R@1 80.00 vs 73.33) at half the size, while both sub-120M candidates land below the no-reranker floor. End-to-end resident cost measured including activations: 4.78 GB (old pair) to 1.57 GB. The old pair remains the documented multilingual tier and is the only combination that works for non-English content.
+- **The CML operator map (v2) now covers every non-ASCII operator, and its version is part of embed provenance.** v1 left the arrows and null out because the EMBEDDER's WordPiece vocabulary represents them, which is true and irrelevant: the default reranker's byte-BPE shreds them into byte pieces, and the arrows are the two most common operators in a real store (752 + 182 occurrences). Arrows map to their ASCII forms, which code-trained models have seen constantly. Changing the map changes every normalized vector without changing the model, so `CML_MAP_VERSION` feeds `embed_model_id()` (`+cmlnorm2`) and doctor reports old-map vectors as mixed provenance instead of letting two geometries mix silently.
+- Custom rerankers register with fastembed automatically at load (`add_custom_model`); the default requires it, `MNEMOS_RERANKER_MODEL` may point at any HF repo with an ONNX export, and `MNEMOS_RERANKER_MODEL_FILE` overrides the file path.
+- MCP warmup logs name the effective models instead of a hardcoded "e5-large/jina reranker".
+
+### Fixed
+- **`reembed` dropped the index at the configured default's width but filled it with the store-pinned model** (found in pre-release review): on any pre-flip store, the exact command doctor recommended would have emptied the index and had every insert rejected. Both sides now use the effective configuration, and doctor's advice spells out the export-then-reembed sequence.
+- **The CML probe missed byte-fallback BPE.** It only looked for `[UNK]`, and byte-level vocabularies never produce one: operators fragment into UTF-8 byte mojibake instead. A model now counts as representing an operator only if some produced token still contains the character. Consequence worth knowing: gte-modernbert's published screen numbers were measured while it read raw operators as mojibake, and it won anyway; with the map engaged its scores can only be cleaner. The query is now mapped alongside the documents, since a cross-encoder scores the pair.
+- **Pre-v10.6 stores (NULL `embed_meta.model`) now pin their index width** even though the model name is unknowable, so the default flip cannot leave their new inserts silently rejected against an old-geometry index.
+- The language warnings cover the post-flip mixed case (multilingual embedder, English reranker arriving via the default) at store time, HTTP startup and doctor, naming the model and the one-env-var fix. Previously every check required the embedder to be English too, which is exactly backwards for this release.
+- "Rerank disabled" is no longer treated as "English-only reranker" by the language checks: absent is not English. Surfaced by the fix below.
+- `test_http_transport`'s fixture wrote `MNEMOS_ENABLE_RERANK=0` to raw `os.environ` without cleanup, leaking into every later test in the process; now monkeypatched.
+- Cache healing (10.30.1) runs on the reranker load path too; previously a long-lived server that already held the embedder never healed an interrupted reranker download. Registration failures print the actual error instead of silently skipping.
+
+### Notes
+- Dedup/contradiction confirm thresholds were tuned on jina-v2 logits. Store-path behavior on gte is untuned: quality-sensitive deployments should set `MNEMOS_DEDUP_CONFIRM=nli` (recommended anyway) or pin jina-v2. Search ranking is unaffected (relative scores).
+- Docs, diagrams and comments swept repo-wide: architecture diagrams are model-agnostic, the tier table is the reference, and the published benchmark numbers remain attributed to the configuration that produced them.
+- Tests now derive vector dimensionality from `FASTEMBED_DIMS`, so the next default change costs zero test edits. 381 pass.
+
 ## [10.32.3] - 2026-08-19 (session-hook pressure guard, done properly)
 
 ### Fixed

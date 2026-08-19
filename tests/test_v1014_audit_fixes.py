@@ -20,7 +20,7 @@ from mnemos.splitter import explode_cml_chain, _sep_free
 from mnemos.storage.base import Memory
 from mnemos.storage.sqlite_store import SQLiteStore
 
-DIMS = 1024
+from mnemos.constants import FASTEMBED_DIMS as DIMS
 
 
 def _store(tmp_path, name="m.db"):

@@ -5,17 +5,19 @@
 ## Hybrid retrieval pipeline
 
 1. **FTS5 BM25** with AND-default + OR-fallback for multi-term queries
-2. **Vector similarity** via FastEmbed e5-large (1024-dim, ONNX, CPU-native, ~7ms/embed)
+2. **Vector similarity** via FastEmbed (ONNX, CPU-native; bge-small 384-dim by default, e5-large 1024-dim on the multilingual tier)
 3. **RRF fusion** (Reciprocal Rank Fusion, k=60) merges both rankings
-4. **Cross-encoder reranking** (Jina v2 multilingual) for final precision. **The cross-encoder is a local ONNX discriminative scorer, not a remote LLM**, it runs on CPU in ~50 ms per query, no API call, no network round trip, no API key required. **Enabled by default** in the public package, but the lite mode without it (`--mode hybrid`) already lands at **98.30% R@5** on LongMemEval, in the same tier as any other verified no-LLM number in the field. The cross-encoder pushes the canonical configuration up to **99.15% R@5**, it is the cherry on top, not a hard requirement to be competitive. Disable with `MNEMOS_ENABLE_RERANK=0` or `Mnemos(enable_rerank=False)` if you want the smallest possible RAM footprint; you trade about 0.85 percentage points of R@5 for ~500 MB less resident memory.
+4. **Cross-encoder reranking** (gte-modernbert by default; jina-v2 multilingual on the multilingual tier) for final precision. **The cross-encoder is a local ONNX discriminative scorer, not a remote LLM**, it runs on CPU in ~50 ms per query, no API call, no network round trip, no API key required. **Enabled by default** in the public package, but the lite mode without it (`--mode hybrid`) already lands at **98.30% R@5** on LongMemEval, in the same tier as any other verified no-LLM number in the field. The cross-encoder pushes the canonical configuration up to **99.15% R@5**. R@5 understates what it does, though: measured 2026-08-19, R@1 is 81.29 without it and 92.40 with it, and R@1 is what an agent reads first. Disable with `MNEMOS_ENABLE_RERANK=0` or `Mnemos(enable_rerank=False)` only when RAM genuinely forces it; the R@5 cost looks like 0.85 points, the R@1 cost is eleven.
 
 ## Why these specific models (and how to swap them)
 
-The embedding model and the reranker are both **swappable**. Mnemos talks to FastEmbed-compatible models for embeddings and to any cross-encoder loadable through FastEmbed for reranking, so you can plug in whatever you prefer. Every benchmark number on this repo is reported on the default e5-large embedder + Jina v2 reranker pair, and changing either side has not been measured.
+The embedding model and the reranker are both **swappable**. Mnemos talks to FastEmbed-compatible models for embeddings and to any cross-encoder loadable through FastEmbed for reranking, so you can plug in whatever you prefer. The published LongMemEval numbers were measured on the e5-large + jina-v2 pair (now the multilingual tier). The v10.33.0 default pair was benchmarked against it before shipping: bge-small matches e5 R@1 92.40 vs 92.01 with a reranker in the pipeline, and gte-modernbert beats jina-v2 on the discriminating categories (preference R@1 80.00 vs 73.33 on the 2026-08-19 stratified subset; the identical 80.00 in benchmarks.md is the full-set jina+CML canonical run, same number by coincidence) at half the size.
 
 ### Embedder
 
-**`intfloat/multilingual-e5-large`** was picked for very specific reasons:
+**CML operator mapping applies to every embedder** (on by default since v10.30.0): CML's relational symbols are outside most model vocabularies, so they are spelled out as words on the scoring copy before embedding, for e5 as much as for the BGE family (e5 tokenizes them but saw them so rarely that words measurably beat symbols). The reranker gets the same map automatically, probed per model at load. Stored content is never touched.
+
+**`intfloat/multilingual-e5-large`** (multilingual tier) was picked for very specific reasons:
 
 - **Truly multilingual**, not English-with-token-mapping. The memory store itself defaults to English CML by convention (the agent writes in English; the Nyx cycle keeps it that way), but the same retrieval pipeline also indexes external data sources via `mnemos ingest` (ebooks, notes, documents, PDFs) which contain Swedish, English, and other languages depending on the source. The semantic match needs to work *across* languages too: an English query like "breakfast" should match a Swedish ebook chapter about "frukost". e5-large handles 100+ languages in the same vector space, which is rare for high-quality models.
 - **1024 dimensions**, a sweet spot I tested my way into. High enough to capture nuance, low enough that brute-force search in SQLite stays fast and storage stays reasonable.
@@ -25,11 +27,11 @@ The embedding model and the reranker are both **swappable**. Mnemos talks to Fas
 
 Swap with `MNEMOS_EMBED_MODEL`. Smaller models (BGE-small, all-MiniLM) are faster but less precise. Larger models (BGE-large, GTE-large) are slower but may score higher on specific benchmarks. The rest of the pipeline does not care.
 
-If you want to run a 4096-dim embedder (e5-mistral-7b, NV-Embed-v2, SFR-Embedding-2_R) or even an 8192-dim Matryoshka model (Stella-en-1.5B-v5 at full resolution), set `MNEMOS_EMBED_MODEL` to whatever ONNX-exposed model you want and `MNEMOS_EMBED_DIMS` to match. Storage scales up (a 4096-dim float32 vector is 16 KB per memory vs 4 KB for the 1024-dim default), per-query embed latency moves from ~7 ms to seconds (those 7B-parameter generative-style embedders are slow on CPU), and you need more RAM. The retrieval recall lift over e5-large is real but small (typically 1-2 points on hard benchmarks). For most users the trade is not worth it. For the ones for whom it is, the swap is one env var.
+If you want to run a 4096-dim embedder (e5-mistral-7b, NV-Embed-v2, SFR-Embedding-2_R) or even an 8192-dim Matryoshka model (Stella-en-1.5B-v5 at full resolution), set `MNEMOS_EMBED_MODEL` to whatever ONNX-exposed model you want and `MNEMOS_EMBED_DIMS` to match. Storage scales up (a 4096-dim float32 vector is 16 KB per memory vs 1.5 KB for the 384-dim default), per-query embed latency moves from ~7 ms to seconds (those 7B-parameter generative-style embedders are slow on CPU), and you need more RAM. The retrieval recall lift over e5-large is real but small (typically 1-2 points on hard benchmarks). For most users the trade is not worth it. For the ones for whom it is, the swap is one env var.
 
 ### Reranker
 
-**`jinaai/jina-reranker-v2-base-multilingual`** was picked for matching reasons:
+**`jinaai/jina-reranker-v2-base-multilingual`** (multilingual tier) was picked for matching reasons:
 
 - **Multilingual** (same language coverage as the embedder, important because the reranker and embedder see the same text).
 - **ONNX-friendly**, CPU-only, no GPU runtime required.

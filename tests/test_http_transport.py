@@ -31,12 +31,15 @@ def _post(url, payload, timeout=10):
 
 
 @pytest.fixture
-def http_server():
+def http_server(monkeypatch):
     fd, db_path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
-    os.environ["MNEMOS_DB"] = db_path
-    os.environ["MNEMOS_EAGER_WARMUP"] = "0"
-    os.environ["MNEMOS_ENABLE_RERANK"] = "0"
+    # monkeypatch, not raw os.environ: these leaked into every test that ran
+    # after this file and made a reload-based test read MNEMOS_ENABLE_RERANK=0
+    # it never set (found via a doctor false positive, 2026-08-19).
+    monkeypatch.setenv("MNEMOS_DB", db_path)
+    monkeypatch.setenv("MNEMOS_EAGER_WARMUP", "0")
+    monkeypatch.setenv("MNEMOS_ENABLE_RERANK", "0")
 
     from mnemos.core import Mnemos
     from mnemos.storage.sqlite_store import SQLiteStore

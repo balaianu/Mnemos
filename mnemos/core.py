@@ -129,26 +129,48 @@ class Mnemos:
         try:
             from .language import non_english_share, is_english_only
             from .embed import effective_model
-            from .constants import RERANKER_MODEL
+            from . import constants as _c
             if non_english_share(content) <= 0.005:
                 return
             enc_en = is_english_only(effective_model())
-            rr_en = is_english_only(RERANKER_MODEL) if self.enable_rerank else True
-            if not (enc_en and rr_en):
+            rr_en = (is_english_only(_c.RERANKER_MODEL)
+                     if self.enable_rerank else False)
+            if not (enc_en or rr_en):
                 return
             Mnemos._lang_warned = True
-            if self.store.count_active(self.namespace) > 200:
+            if enc_en and self.store.count_active(self.namespace) > 200:
                 # An established store is doctor's job; warning on every
                 # foreign quote in a mature English store would be noise.
+                # The reranker-only case has no age exemption: it is exactly
+                # the post-default-flip trap (multilingual store pinned to
+                # its embedder, English reranker arriving via the default)
+                # and the fix is one env var, not a re-embed.
                 return
-            result["warning"] = (
-                "this memory contains non-English content but the configured "
-                "embedder and reranker are English-only; non-English "
-                "retrieval will be degraded. If this store will hold "
-                "non-English content, switch tiers NOW while re-embedding is "
-                "cheap: see the model-tier table in docs/usage.md, then run "
-                "`mnemos reembed`."
-            )
+            if enc_en and rr_en:
+                result["warning"] = (
+                    "this memory contains non-English content but the "
+                    "configured embedder and reranker are English-only; "
+                    "non-English retrieval will be degraded. If this store "
+                    "will hold non-English content, switch tiers NOW while "
+                    "re-embedding is cheap: see the model-tier table in "
+                    "docs/usage.md, then run `mnemos reembed`."
+                )
+            elif rr_en:
+                result["warning"] = (
+                    "this memory contains non-English content and the "
+                    "configured reranker is English-only (the embedder is "
+                    "multilingual). Non-English scoring is degraded; set "
+                    "MNEMOS_RERANKER_MODEL="
+                    "jinaai/jina-reranker-v2-base-multilingual to restore "
+                    "the multilingual tier. No re-embed needed."
+                )
+            else:
+                result["warning"] = (
+                    "this memory contains non-English content and the "
+                    "configured embedder is English-only. See the model-tier "
+                    "table in docs/usage.md; migrating requires "
+                    "`mnemos reembed`."
+                )
             import sys
             print("Mnemos: " + result["warning"], file=sys.stderr)
         except Exception:
@@ -1587,10 +1609,17 @@ class Mnemos:
         """
         if not self.store.supports_maintenance:
             return {"error": "reembed requires a SQLite-based store"}
-        from .constants import FASTEMBED_MODEL, FASTEMBED_DIMS
+        # EFFECTIVE config on both sides, never the raw constants: the store
+        # may be pinned (v10.30.0), and dropping the index at the constants'
+        # width while embed() fills at the pinned width would empty the index
+        # and then have every insert rejected. Field-review catch, v10.33.0.
+        # Consequence: a bare `mnemos reembed` on a pinned store rebuilds IN
+        # PLACE under the pinned model; to migrate, export MNEMOS_EMBED_MODEL
+        # and MNEMOS_EMBED_DIMS explicitly (env outranks the pin).
+        from .embed import effective_model, effective_dims
 
         current = self.store.get_vec_dims()
-        result = {"model": FASTEMBED_MODEL, "target_dims": FASTEMBED_DIMS,
+        result = {"model": effective_model(), "target_dims": effective_dims(),
                   "previous_dims": current, "dry_run": dry_run}
         if dry_run:
             result["would_reembed"] = self.store.count_active(self.namespace)
@@ -1601,7 +1630,7 @@ class Mnemos:
             dest = f"{self.store.db_path}.pre-reembed-{time.strftime('%Y%m%d-%H%M%S')}"
             result["backup"] = self.store.backup(dest)
 
-        self.store.reset_vec_index(FASTEMBED_DIMS)
+        self.store.reset_vec_index(effective_dims())
 
         filled = failed = 0
         while True:
@@ -1760,9 +1789,10 @@ class Mnemos:
                 msg = ("Embedder pinned to this store's existing vectors: "
                        + ", ".join(f"{k} {old} -> {new}"
                                    for k, (old, new) in adopted.items()))
-                msg += (". Run `mnemos reembed` to migrate to the configured "
-                        "default, or set MNEMOS_EMBED_MODEL explicitly to keep "
-                        "the pinned model permanently.")
+                msg += (". A bare `mnemos reembed` rebuilds IN PLACE under "
+                        "the pinned model; to migrate to the default, export "
+                        "MNEMOS_EMBED_MODEL and MNEMOS_EMBED_DIMS explicitly "
+                        "and then run `mnemos reembed`.")
                 report["checks"].append(msg)
         except Exception as e:
             report["issues"].append(f"Embedder pinning check failed: {e}")
@@ -1774,20 +1804,29 @@ class Mnemos:
         try:
             from .language import scan_contents, is_english_only
             from .embed import effective_model
-            from .constants import RERANKER_MODEL, DEFAULT_ENABLE_RERANK
+            from . import constants as _c
             enc_en = is_english_only(effective_model())
-            rr_en = is_english_only(RERANKER_MODEL) if DEFAULT_ENABLE_RERANK else True
+            # Rerank disabled means there IS no reranker arm: it cannot be
+            # "English-only", it is absent, and only the embedder matters.
+            rr_en = (is_english_only(_c.RERANKER_MODEL)
+                     if _c.DEFAULT_ENABLE_RERANK else False)
             if enc_en or rr_en:
                 affected, total = scan_contents(
                     self.store.sample_contents(self.namespace))
                 if total and affected / total > 0.10:
                     both = enc_en and rr_en
-                    report["issues" if both else "checks"].append(
+                    # Reranker-only used to be a check; promoted to an issue
+                    # because it is the exact shape the v10.33.0 default flip
+                    # creates on multilingual deployments, and the fix is one
+                    # env var.
+                    report["issues"].append(
                         f"Language coverage: {affected} of {total} sampled "
                         "memories contain non-English content, but "
-                        + ("both the embedder and the reranker are "
+                        + (f"both the embedder ({effective_model()}) and the "
+                           f"reranker ({_c.RERANKER_MODEL}) are "
                            if both else
-                           ("the embedder is " if enc_en else "the reranker is "))
+                           (f"the embedder ({effective_model()}) is " if enc_en
+                            else f"the reranker ({_c.RERANKER_MODEL}) is "))
                         + "English-only. "
                         + ("Non-English retrieval will be degraded on every "
                            "path; use the multilingual tier "
@@ -1795,9 +1834,13 @@ class Mnemos:
                            "jinaai/jina-reranker-v2-base-multilingual) or the "
                            "mixed tier (English embedder + multilingual "
                            "reranker)." if both else
-                           "FTS and the multilingual stage still cover it; "
-                           "this is workable for a mixed store, but not for a "
-                           "predominantly non-English one.")
+                           ("Non-English scoring is degraded; set "
+                            "MNEMOS_RERANKER_MODEL="
+                            "jinaai/jina-reranker-v2-base-multilingual "
+                            "(no re-embed needed)." if rr_en else
+                            "FTS and the multilingual reranker still cover "
+                            "it; workable for a mixed store, not for a "
+                            "predominantly non-English one."))
                     )
                 else:
                     report["checks"].append(

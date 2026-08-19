@@ -18,7 +18,8 @@ store hot path can import it without pulling in consolidation or numpy.
 import os
 import re
 
-# Aligned to the e5-large embedder window (~512 tokens, ~2000-2500 chars):
+# Aligned to the encoder window (~512 tokens for e5-large and the bge family,
+# ~2000-2500 chars):
 # content past that is truncated out of the embedding vector, so larger targets
 # silently hurt vector recall. 2400 keeps a whole chunk inside the window.
 SPLIT_THRESHOLD = int(os.environ.get("MNEMOS_SPLIT_THRESHOLD", "4000"))

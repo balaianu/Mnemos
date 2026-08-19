@@ -4,7 +4,7 @@ SQLite storage backend for Mnemos.
 Single-file storage with FTS5 (BM25) and sqlite-vec (vector search) in one
 unified database. Atomic transactions, no synchronization between stores.
 
-Performance characteristics (1024-dim vectors, brute-force):
+Performance characteristics (1024-dim vectors (a snapshot from the e5 era; the 384-dim default scans proportionally faster), brute-force):
   - 1K memories:    ~5ms search
   - 5K memories:   ~25ms search
   - 10K memories:  ~45ms search
@@ -273,11 +273,15 @@ class SQLiteStore(MnemosStore):
                 "AND model IS NOT NULL GROUP BY model ORDER BY c DESC LIMIT 1",
                 (self.SOURCE_KEY,),
             ).fetchone()
-            if not row or not row["model"]:
-                return
             from ..embed import adopt_store_config
-            self._embed_adoption = adopt_store_config(row["model"],
-                                                      self.get_vec_dims())
+            model_id = row["model"] if row else None
+            dims = self.get_vec_dims()
+            if not model_id and not dims:
+                return
+            # NULL provenance (pre-v10.6 rows) still pins DIMS from the index
+            # width, so a default flip cannot leave new inserts rejected
+            # against an old-geometry index. Doctor reports the ambiguity.
+            self._embed_adoption = adopt_store_config(model_id, dims)
         except Exception:
             # A store too broken to report its own provenance is doctor's
             # problem, not a reason to refuse to open it.

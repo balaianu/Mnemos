@@ -53,7 +53,7 @@ the NLI layer has a few weeks of production soak.
   the research path is QDQ/per-channel static quantization WITH the
   parity gate re-run; anything that flips threshold decisions on the
   bench pairs is dead on arrival.
-- **Jina v3 reranker.** Decided against; v2 is canonical for search
+- **Jina v3 reranker.** Decided against; v2 serves the multilingual tier for search
   ranking. The store-decision roles the reranker used to hold moved to
   the NLI layer in v10.15.
 

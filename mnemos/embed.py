@@ -1,7 +1,7 @@
 """
 FastEmbed wrapper for Mnemos.
 
-Uses the FASTEMBED_MODEL ONNX model (default multilingual-e5-large, 1024-dim).
+Uses the FASTEMBED_MODEL ONNX model (default bge-small-en-v1.5, 384-dim; multilingual tier e5-large, 1024-dim).
 Loads once at startup, ~7ms per embedding on CPU. Embedding families differ in
 how they mark documents versus queries; _prefixes() resolves that per model so
 callers keep passing a plain "passage" / "query" role.
@@ -118,9 +118,18 @@ def maybe_unload(force=False):
     return False
 
 
-# Only the operators an English WordPiece vocabulary cannot represent. The
-# survivors (-> <-> <- @ ~ null >) are left alone: substituting a token the
-# model already has would change the text for no measured reason.
+# Every non-ASCII CML operator. v1 of this map left the arrows and null out
+# on the grounds that WordPiece-30522 represents them, which was true of the
+# EMBEDDER and false of the default reranker: byte-BPE vocabularies
+# (gte-modernbert) shred them into byte pieces, and the arrows are the two
+# most common operators in a real store (752 + 182 occurrences measured).
+# Arrows map to their ASCII forms, which every code-trained model has seen
+# constantly; ASCII operators (> @ ~ ;) are left alone everywhere.
+# CML_MAP_VERSION feeds embed_model_id(): changing this map changes every
+# normalized vector without changing the model, so it must be part of the
+# provenance identity or doctor cannot see the flip and stores silently mix
+# two geometries. Bump it whenever the map's SEMANTICS change.
+CML_MAP_VERSION = 2
 CML_EMBED_MAP = {
     "\u2235": " because ",      # therefore-because
     "\u2234": " therefore ",
@@ -128,6 +137,10 @@ CML_EMBED_MAP = {
     "\u26a0": " warning ",
     "\u2713": " confirmed ",
     "\u2717": " rejected ",
+    "\u2192": " -> ",           # uses/chose/leads-to
+    "\u2194": " <-> ",
+    "\u2190": " <- ",
+    "\u2205": " none ",         # declined/rejected/empty
     "\u27ea": " ",              # FTS5 snippet markers, not semantic
     "\u27eb": " ",
     "\u2550": " ",              # box-drawing separators in prose memories
@@ -167,7 +180,9 @@ def embed_model_id():
     has to be part of the identity or doctor's provenance check cannot see a
     flip and the store silently mixes two geometries.
     """
-    return effective_model() + ("+cmlnorm" if effective_normalize() else "")
+    suffix = "" if not effective_normalize() else (
+        "+cmlnorm" if CML_MAP_VERSION == 1 else f"+cmlnorm{CML_MAP_VERSION}")
+    return effective_model() + suffix
 
 
 # Effective embedder config. The env vars seed it; a populated store can pin it
@@ -208,9 +223,25 @@ def adopt_store_config(model_id, dims=None):
     """
     global _instance, _dims_checked
     if not model_id:
-        return {}
-    normalize = model_id.endswith("+cmlnorm")
-    model = model_id[: -len("+cmlnorm")] if normalize else model_id
+        # Pre-v10.6 stores have vectors but NULL embed_meta.model. The model
+        # cannot be guessed, but the INDEX WIDTH is authoritative, and pinning
+        # it is what keeps new inserts from being rejected against a store
+        # whose geometry predates the current default. The width alone does
+        # not identify a model (384 and 768 stores of several families
+        # exist), so only dims are pinned and doctor reports the ambiguity.
+        changed = {}
+        if dims and not EMBED_DIMS_EXPLICIT and dims != _effective["dims"]:
+            changed["dims"] = (_effective["dims"], dims)
+            _effective["dims"] = dims
+            with _lock:
+                _instance = None
+            _dims_checked = False
+        return changed
+    # Any +cmlnorm suffix (versioned or not) means the vectors were built
+    # normalized; the VERSION difference is mixed provenance, which doctor
+    # reports, not something adoption should mask.
+    normalize = "+cmlnorm" in model_id
+    model = model_id.split("+cmlnorm")[0] if normalize else model_id
 
     changed = {}
     if not EMBED_MODEL_EXPLICIT and model != _effective["model"]:

@@ -60,11 +60,18 @@ def test_opposites_stay_distinguishable(monkeypatch):
     assert "confirmed" in yes and "rejected" in no
 
 
-def test_surviving_operators_are_left_alone(monkeypatch):
+def test_ascii_operators_are_left_alone(monkeypatch):
+    """v2 map: only ASCII operators survive untouched. The arrows and null
+    map to ASCII forms because the default reranker's byte-BPE vocabulary
+    shreds the unicode originals, and the arrows are the two most common
+    operators in a real store."""
     e = _reload(monkeypatch, True)
     out = e.normalize_cml("F: a → b ↔ c @ d ~ e ∅ f > g")
-    for sym in ("→", "↔", "@", "~", "∅", ">"):
+    for sym in ("@", "~", ">"):
         assert sym in out
+    assert "->" in out and "<->" in out and " none " in out
+    for sym in ("→", "↔", "∅"):
+        assert sym not in out
 
 
 def test_snippet_markers_and_rules_are_dropped(monkeypatch):
@@ -92,7 +99,7 @@ def test_model_id_marks_normalization(monkeypatch):
     e = _reload(monkeypatch, False)
     plain = e.embed_model_id()
     e = _reload(monkeypatch, True)
-    assert e.embed_model_id() == plain + "+cmlnorm"
+    assert e.embed_model_id() == plain + f"+cmlnorm{e.CML_MAP_VERSION}"
 
 
 def test_model_id_is_plain_when_off(monkeypatch):
@@ -158,16 +165,25 @@ def test_partial_explicit_only_pins_the_rest(monkeypatch):
 
 def test_matching_config_reports_no_change(monkeypatch):
     e = _fresh_embed(monkeypatch)
-    # Must match on all three, including the +cmlnorm suffix, since
-    # normalization is on by default from v10.30.0.
-    assert e.adopt_store_config(
-        "intfloat/multilingual-e5-large+cmlnorm", 1024) == {}
+    # Default-agnostic on purpose: build the provenance string from the
+    # CURRENT default so the next default flip does not break this test.
+    assert e.adopt_store_config(e.embed_model_id(), e.effective_dims()) == {}
 
 
-def test_empty_model_id_is_ignored(monkeypatch):
+def test_null_provenance_pins_dims_only(monkeypatch):
+    """Changed contract in v10.33.0 (field finding): pre-v10.6 stores have
+    vectors but NULL embed_meta.model. The model cannot be guessed, but the
+    index width is authoritative, so dims pin even without a model name;
+    otherwise a default flip leaves every new insert rejected against the
+    old-geometry index."""
     e = _fresh_embed(monkeypatch)
-    assert e.adopt_store_config(None, 1024) == {}
-    assert e.adopt_store_config("", 1024) == {}
+    changed = e.adopt_store_config(None, 1024)
+    assert changed == {"dims": (e.FASTEMBED_DIMS, 1024)} or "dims" in changed
+    assert e.effective_dims() == 1024
+    from mnemos.constants import FASTEMBED_MODEL
+    assert e.effective_model() == FASTEMBED_MODEL   # model untouched
+    # dims matching the effective value is a true no-op
+    assert e.adopt_store_config("", e.effective_dims()) == {}
 
 
 def test_populated_store_pins_a_moved_default(monkeypatch, tmp_path):
@@ -191,7 +207,8 @@ def test_empty_store_does_not_pin_anything(monkeypatch, tmp_path):
     store = SQLiteStore(db_path=str(tmp_path / "empty.db"), namespace="t")
     store._get_conn()
     assert store._embed_adoption == {}
-    assert e.effective_model() == "intfloat/multilingual-e5-large"
+    from mnemos.constants import FASTEMBED_MODEL
+    assert e.effective_model() == FASTEMBED_MODEL
 
 
 def test_existing_unnormalized_store_survives_the_new_default(monkeypatch, tmp_path):

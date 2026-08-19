@@ -38,8 +38,8 @@
     │              │               │               │
 ┌───▼─────────┐ ┌──▼────────────┐ ┌▼─────────────┐ ┌▼─────────────┐
 │mnemos.embed │ │ mnemos.rerank │ │ mnemos.nli   │ │ mnemos.query │
-│ (FastEmbed  │ │ (Jina cross-  │ │ (NLI dedup/  │ │ (FTS5 query  │
-│  e5-large)  │ │  encoder v2,  │ │  contradict, │ │  builder)    │
+│ (FastEmbed  │ │ (cross-       │ │ (NLI dedup/  │ │ (FTS5 query  │
+│  embedder)  │ │  encoder,     │ │  contradict, │ │  builder)    │
 │             │ │  search only) │ │  ONNX)       │ │              │
 └─────────────┘ └───────────────┘ └──────────────┘ └──────────────┘
                                                   │
@@ -126,7 +126,7 @@ Query "what does the user hold in their portfolio?"
         ┌──────────────────────┐
         │  Cross-encoder       │
         │  rerank top 20       │
-        │  (Jina v2)           │
+        │  (reranker)          │
         └──────────┬───────────┘
                    │
                    ▼
@@ -381,7 +381,7 @@ HNSW indexing. Sub-50ms vector search at million-scale. Use this when you have:
 
 First query in a session loads:
 - FastEmbed e5-large ONNX (~500MB, ~3-5s on CPU)
-- Jina cross-encoder ONNX (~250MB, ~2-3s on CPU)
+- cross-encoder reranker ONNX (~2-3s cold-load on CPU)
 
 Both are cached in memory after first load. Subsequent queries are fast (<200ms total).
 
@@ -393,20 +393,20 @@ Mnemos is CPU-only but it does load real models into RAM. Component breakdown:
 |---|---|---|---|
 | Python + Mnemos package | ~50 MB | ~100-150 MB | Always |
 | SQLite + sqlite-vec | trivial | ~10-50 MB (page cache) | Always |
-| e5-large embedder (ONNX) | ~500 MB | ~800 MB - 1 GB | Always loaded once on startup |
-| Jina cross-encoder reranker (ONNX) | ~280 MB | ~400-500 MB | Only if `enable_rerank=True` |
+| embedder (ONNX) | default tier ~35 MB, multilingual ~500 MB | ~150 MB / ~1 GB | Always loaded once on startup |
+| cross-encoder reranker (ONNX) | default ~600 MB, multilingual ~1.1 GB on disk | ~300-500 MB | Only if `enable_rerank=True` |
 
-**With reranker** (default): **~1.5-1.7 GB resident**. First call spools the cross-encoder ONNX (1-2s cold-start), then subsequent reranks are ~50 ms. The MCP server warms it up at boot so the spool cost is paid once at startup rather than on the first user query.
+**With reranker** (default): **~0.5-0.7 GB resident on the default tier, ~1.5-1.7 GB on the multilingual tier**. First call spools the cross-encoder ONNX (1-2s cold-start), then subsequent reranks are ~50 ms. The MCP server warms it up at boot so the spool cost is paid once at startup rather than on the first user query.
 
-**Without reranker** (opt-out via `MNEMOS_ENABLE_RERANK=0`): **~1-1.2 GB resident**. Fits comfortably on a 2 GB+ Raspberry Pi 4/5 or a small VPS. Trades about half a percentage point of R@5 for ~500 MB less resident memory. All benchmark numbers remain in the same tier as any verified no-LLM recall number in the field.
+**Without reranker** (opt-out via `MNEMOS_ENABLE_RERANK=0`): **~0.2-0.4 GB resident on the default tier** (~1-1.2 GB multilingual). The R@5 cost looks like half a point; the measured R@1 cost is eleven (81.29 vs 92.40), so treat this as a hardware-forced mode, not a tuning knob.
 
-**Disk**: about 800 MB total for both ONNX models, downloaded automatically from HuggingFace on first use and cached under `~/.cache/fastembed`.
+**Disk**: ~650 MB for the default tier's two ONNX models (~3.3 GB for the multilingual tier), downloaded automatically from HuggingFace on first use and cached under `~/.cache/fastembed`.
 
-**Sub-1 GB hardware**: Mnemos is not designed for it. The e5-large embedder is ~500 MB in memory by itself and the runtime + SQLite + Python interpreter add the rest, so even the lightest default configuration sits around 1 GB. For 512 MB devices (Pi Zero, micro-VPS, embedded), swap `intfloat/multilingual-e5-large` for a smaller embedder like `BAAI/bge-small-en-v1.5` (English only, 33 MB ONNX, ~150 MB RAM) via `MNEMOS_EMBED_MODEL` and disable the reranker. Retrieval quality drops noticeably (no multilingual, less semantic headroom) but the system still works as a basic memory store.
+**Sub-1 GB hardware**: the default tier (bge-small + gte-modernbert, since v10.33.0) sits well under 1 GB resident and runs on a 2 GB Pi. For 512 MB devices, disable the reranker as well; R@1 drops hard (81 vs 92 measured) but the system still works as a basic memory store. Multilingual stores cannot shrink this way: the multilingual tier (e5-large + jina-v2) is the smallest combination that works for non-English content, measured against every smaller multilingual candidate.
 
 ## Multi-source indexing (production pattern)
 
-The author runs Mnemos in **split-storage mode (SQLite + Qdrant)** in production. Mnemos itself only indexes the curated memory layer, but the same FastEmbed/Jina pipeline is used to index bulk content via Qdrant collections:
+The author runs Mnemos in **split-storage mode (SQLite + Qdrant)** in production. Mnemos itself only indexes the curated memory layer, but the same FastEmbed pipeline is used to index bulk content via Qdrant collections:
 
 ```
 ┌────────────────────┐

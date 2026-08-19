@@ -108,7 +108,7 @@ NLI_DEDUP_MAX_CANDIDATES = int(os.environ.get("MNEMOS_NLI_DEDUP_MAX_CANDIDATES",
 # idle reaper never gets a window on a busy host (reported from a 7.3GB
 # system: 700MB -> 4.8GB RSS, OOM + swap; contributed by balaianu/Mnemos).
 # MNEMOS_DISABLE_MEM_ARENA passes enable_cpu_mem_arena=False to every ONNX
-# session Mnemos creates (e5 embedder, Jina reranker, both NLI scorers): each
+# session Mnemos creates (embedder, reranker, both NLI scorers): each
 # inference allocates from the system and returns it.
 # Opt-in, default 0, same contract as MNEMOS_MODEL_IDLE_TTL and
 # MNEMOS_MIN_FREE_MB. Strongly recommended for any long-lived process: the
@@ -211,7 +211,18 @@ MAX_CLUSTERS_PER_RUN = 10
 MAX_CLUSTER_SIZE = 8
 
 # --- Embedding model ---
-FASTEMBED_MODEL = os.environ.get("MNEMOS_EMBED_MODEL", "intfloat/multilingual-e5-large")
+# DEFAULT SWITCHED to the light tier in v10.33.0 (benchmarked 2026-08-19,
+# see docs/usage.md model tiers and issue #4). bge-small ties e5-large on
+# LongMemEval R@1 92.40 vs 92.01 WITH the reranker in the pipeline, at 33M
+# params against 560M. The reranker is what makes this safe: without one,
+# e5 is clearly better (R@1 88.43 vs 81.29), so do not pair this default
+# with MNEMOS_ENABLE_RERANK=0 on quality-sensitive stores.
+# Populated stores are unaffected: they pin to the model their vectors were
+# built with (v10.30.0) until their owner runs `mnemos reembed`.
+# Multilingual stores should use the multilingual tier:
+#   MNEMOS_EMBED_MODEL=intfloat/multilingual-e5-large MNEMOS_EMBED_DIMS=1024
+#   MNEMOS_RERANKER_MODEL=jinaai/jina-reranker-v2-base-multilingual
+FASTEMBED_MODEL = os.environ.get("MNEMOS_EMBED_MODEL", "BAAI/bge-small-en-v1.5")
 EMBED_MODEL_EXPLICIT = "MNEMOS_EMBED_MODEL" in os.environ
 # Dimensionality of FASTEMBED_MODEL. Must match the model: e5-large and
 # bge-large are 1024, bge-base 768, bge-small and MiniLM 384. Changing
@@ -219,7 +230,7 @@ EMBED_MODEL_EXPLICIT = "MNEMOS_EMBED_MODEL" in os.environ
 # corrupt anything silently: sqlite-vec rejects the insert ("Expected 1024
 # dimensions but received 384") and embed() raises first with the value to
 # set, but the store is left without vectors until it is corrected.
-FASTEMBED_DIMS = int(os.environ.get("MNEMOS_EMBED_DIMS", "1024"))
+FASTEMBED_DIMS = int(os.environ.get("MNEMOS_EMBED_DIMS", "384"))
 EMBED_DIMS_EXPLICIT = "MNEMOS_EMBED_DIMS" in os.environ
 # --- CML operator normalization (opt-in) ---
 # CML's relational operators are unicode symbols. SentencePiece vocabularies
@@ -248,9 +259,19 @@ FASTEMBED_CACHE = os.environ.get(
 )
 
 # --- Reranker model ---
+# gte-modernbert (149M) BEATS jina-v2 (278M) on the discriminating LongMemEval
+# categories at half the size (preference R@1 80.00 vs 73.33). It is English-
+# only (byte-level BPE, so CML operators fragment into byte pieces rather
+# than [UNK]; the load-time probe detects that and spells them out, and maps
+# the query to match); unlike the embedder, the reranker is NOT pinned per store (it touches
+# no stored data), so existing multilingual deployments must set
+# MNEMOS_RERANKER_MODEL=jinaai/jina-reranker-v2-base-multilingual explicitly
+# or their non-English scoring degrades on the next restart. doctor and the
+# store path warn when that combination meets non-English content.
+# Not in fastembed's built-in catalogue: rerank.py registers it at load.
 RERANKER_MODEL = os.environ.get(
     "MNEMOS_RERANKER_MODEL",
-    "jinaai/jina-reranker-v2-base-multilingual"
+    "Alibaba-NLP/gte-reranker-modernbert-base"
 )
 
 # --- Reranker / embedder tensor shape bounds ---

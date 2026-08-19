@@ -175,15 +175,18 @@ def serve(http: str | None = None, unix: str | None = None, mnemos=None) -> None
     try:
         from .language import scan_contents, is_english_only
         from .embed import effective_model
-        from .constants import RERANKER_MODEL, DEFAULT_ENABLE_RERANK
-        if is_english_only(effective_model()) and (
-                not DEFAULT_ENABLE_RERANK or is_english_only(RERANKER_MODEL)):
+        from . import constants as _c
+        enc_en = is_english_only(effective_model())
+        rr_en = _c.DEFAULT_ENABLE_RERANK and is_english_only(_c.RERANKER_MODEL)
+        if enc_en or rr_en:
             affected, total = scan_contents(
                 mnemos.store.sample_contents(mnemos.namespace))
             if total and affected / total > 0.10:
+                which = ("models are" if (enc_en and rr_en) else
+                         "reranker is" if rr_en else "embedder is")
                 sys.stderr.write(
                     f"Mnemos: {affected}/{total} sampled memories contain "
-                    "non-English content but the configured models are "
+                    f"non-English content but the configured {which} "
                     "English-only; see `mnemos doctor` for options\n")
                 sys.stderr.flush()
     except Exception:

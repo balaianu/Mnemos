@@ -10,7 +10,10 @@ non-ASCII letters in the affected memories, so the per-memory threshold is
 0.5%. Pure-English stores measure 0 and never trip it.
 """
 
+import os
+
 from mnemos.language import is_english_only, non_english_share, scan_contents
+from mnemos.constants import FASTEMBED_DIMS
 from mnemos.core import Mnemos
 from mnemos.storage.sqlite_store import SQLiteStore
 
@@ -122,11 +125,17 @@ def test_doctor_quiet_on_english_store(tmp_path, monkeypatch):
     importlib.reload(mnemos.constants); importlib.reload(mnemos.embed)
 
 
-def test_doctor_quiet_with_multilingual_pair(tmp_path):
+def test_doctor_quiet_with_multilingual_pair(tmp_path, monkeypatch):
+    _multilingual_models(monkeypatch)
     m = _mnemos(tmp_path)
     _seed(m, ["styrelsemöte ärende förening"] * 5)
+    import mnemos.constants as _c
+    from mnemos.embed import effective_model
     report = m.doctor()
-    assert not any("Language coverage" in i for i in report["issues"])
+    offending = [i for i in report["issues"] if "Language coverage" in i]
+    assert not offending, (offending, _c.RERANKER_MODEL, effective_model(),
+                           os.environ.get("MNEMOS_RERANKER_MODEL"))
+    _reset_models(monkeypatch)
 
 
 # --- store-time early warning ------------------------------------------------
@@ -144,7 +153,7 @@ def _english_models(monkeypatch):
     # whatever the temp store was created with.
     import mnemos.core
     monkeypatch.setattr(mnemos.core, "embed",
-                        lambda texts, prefix="passage": [[0.1] * 1024
+                        lambda texts, prefix="passage": [[0.1] * FASTEMBED_DIMS
                                                          for _ in texts])
 
 
@@ -154,6 +163,26 @@ def _reset_models(monkeypatch):
         monkeypatch.delenv(k, raising=False)
     import mnemos.constants, mnemos.embed
     importlib.reload(mnemos.constants); importlib.reload(mnemos.embed)
+
+
+def _multilingual_models(monkeypatch):
+    """The multilingual TIER, explicitly: since v10.33.0 the defaults are the
+    English tier, so tests about the multilingual pair must ask for it."""
+    import importlib
+    monkeypatch.setenv("MNEMOS_EMBED_MODEL", "intfloat/multilingual-e5-large")
+    monkeypatch.setenv("MNEMOS_EMBED_DIMS", "1024")
+    monkeypatch.setenv("MNEMOS_RERANKER_MODEL",
+                       "jinaai/jina-reranker-v2-base-multilingual")
+    import mnemos.constants, mnemos.embed
+    importlib.reload(mnemos.constants); importlib.reload(mnemos.embed)
+    # Some earlier test in a full-suite run leaves embed._effective pointing
+    # at the English default even after the reload above (reload rebuilds
+    # _effective from constants, but only if constants were reloaded FIRST in
+    # this exact order on every path). Pin the pair positively instead of
+    # trusting reload ordering.
+    import mnemos.embed as _e
+    _e._effective.update({"model": "intfloat/multilingual-e5-large",
+                          "dims": 1024})
 
 
 def test_store_warns_early_on_foreign_content(tmp_path, monkeypatch):
@@ -190,13 +219,14 @@ def test_store_silent_on_english_content(tmp_path, monkeypatch):
 
 
 def test_store_silent_with_multilingual_models(tmp_path, monkeypatch):
-    _reset_models(monkeypatch)
+    _multilingual_models(monkeypatch)
     import mnemos.core
     monkeypatch.setattr(mnemos.core, "embed",
-                        lambda texts, prefix="passage": [[0.1] * 1024
+                        lambda texts, prefix="passage": [[0.1] * FASTEMBED_DIMS
                                                          for _ in texts])
     Mnemos._lang_warned = False
     m = _mnemos(tmp_path)
     r = m.store_memory(project="brf", content="kallelse till styrelsemöte",
                        skip_dedup=True)
     assert "English-only" not in r.get("warning", "")
+    _reset_models(monkeypatch)

@@ -18,7 +18,7 @@ import mnemos.core as core_mod
 from mnemos.core import Mnemos, _summarize_quick_check, _corruption_hint
 from mnemos.storage.sqlite_store import SQLiteStore
 
-DIMS = 1024
+from mnemos.constants import FASTEMBED_DIMS as DIMS
 
 
 def _fake_embed(texts, prefix="passage"):

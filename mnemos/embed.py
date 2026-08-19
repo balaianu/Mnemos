@@ -129,6 +129,18 @@ def maybe_unload(force=False):
 # normalized vector without changing the model, so it must be part of the
 # provenance identity or doctor cannot see the flip and stores silently mix
 # two geometries. Bump it whenever the map's SEMANTICS change.
+# DESIGN RULE (the arrows lesson): membership here is decided by probing
+# tokenizers, never by assuming. The criterion is that every model in the
+# pipeline receives tokens it has strong learned representations for, and
+# there are three tiers of "understands": cannot see it at all ([UNK],
+# byte-mojibake), technically has a token but nearly untrained (e5's rare
+# unicode pieces), and knows it cold (ASCII, common words). Everything must
+# land in the last tier for the configured pair.
+# KNOWN CEILING: the map is uniform across models while blindness is
+# per-model. The right refinement, if a model ever appears that this map
+# mis-serves, is per-symbol resolution from the load-time probe, with the
+# RESOLVED map hashed into embed provenance (a version number cannot
+# distinguish two models' differing per-symbol verdicts). See ROADMAP.
 CML_MAP_VERSION = 2
 CML_EMBED_MAP = {
     "\u2235": " because ",      # therefore-because

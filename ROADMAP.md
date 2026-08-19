@@ -7,6 +7,24 @@ to CHANGELOG.md when shipped.
 
 ## Near-term candidates
 
+- **Per-symbol CML operator mapping, resolved from the tokenizer probe.**
+  The v2 map (10.33.0) is uniform across models, chosen to be safe for the
+  worst tokenizer benchmarked; blindness is per-model (WordPiece drops nine
+  operators to [UNK], byte-BPE shreds a different set into byte pieces,
+  SentencePiece carries all of them weakly). The load-time probe already
+  answers "does this model represent X" per symbol and today aggregates it
+  to one boolean. Resolving the map per symbol would give each model exactly
+  the substitutions it needs, no more, and would let a future model keep an
+  operator native where measurement says native wins. Precondition, and the
+  reason this is not built yet: per-model embed text means the RESOLVED map
+  must be hashed into embed provenance, since a version number cannot
+  distinguish two models' differing per-symbol verdicts. Build it the first
+  time a real model shows up that the uniform map mis-serves; until then the
+  uniform map measurably lands every shipped tier in the "knows it cold"
+  band. (Design rule either way: membership is decided by probing
+  tokenizers, never by assuming. The arrows lesson, 2026-08-19.)
+
+
 ### Fix the order-dependent tier-2 test flake
 
 **Status**: identified 2026-07-02.

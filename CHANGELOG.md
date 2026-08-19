@@ -4,6 +4,11 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.32.1] - 2026-08-19 (language warning at store time)
+
+### Fixed
+- The language-coverage detection warned at doctor time and server startup, which is after the damage: the wrong moment to learn your tier cannot read your language is after importing a thousand memories. `store_memory` now warns on the FIRST non-English memory stored under English-only models, in the tool result and on stderr, while the store is young enough that `mnemos reembed` is free. Fires once per process; stores past 200 active memories are left to doctor, where warning on every foreign quote in a mature English store would be noise.
+
 ## [10.32.0] - 2026-08-19 (language-coverage detection)
 
 ### Added

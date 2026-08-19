@@ -121,6 +121,39 @@ class Mnemos:
 
     # --- Store ---
 
+    _lang_warned = False
+
+    def _maybe_warn_language(self, content, result):
+        if Mnemos._lang_warned:
+            return
+        try:
+            from .language import non_english_share, is_english_only
+            from .embed import effective_model
+            from .constants import RERANKER_MODEL
+            if non_english_share(content) <= 0.005:
+                return
+            enc_en = is_english_only(effective_model())
+            rr_en = is_english_only(RERANKER_MODEL) if self.enable_rerank else True
+            if not (enc_en and rr_en):
+                return
+            Mnemos._lang_warned = True
+            if self.store.count_active(self.namespace) > 200:
+                # An established store is doctor's job; warning on every
+                # foreign quote in a mature English store would be noise.
+                return
+            result["warning"] = (
+                "this memory contains non-English content but the configured "
+                "embedder and reranker are English-only; non-English "
+                "retrieval will be degraded. If this store will hold "
+                "non-English content, switch tiers NOW while re-embedding is "
+                "cheap: see the model-tier table in docs/usage.md, then run "
+                "`mnemos reembed`."
+            )
+            import sys
+            print("Mnemos: " + result["warning"], file=sys.stderr)
+        except Exception:
+            pass
+
     def store_memory(self, project, content, tags="", importance=5,
                      mem_type="fact", layer="semantic", verified=False,
                      subcategory=None, valid_from=None, valid_until=None,
@@ -222,6 +255,14 @@ class Mnemos:
                 "embedding failed; memory stored FTS-only and invisible to "
                 "vector search until backfilled, run `mnemos embed-fill`"
             )
+
+        # Early language warning. The tier default is English-only models,
+        # and the wrong moment to discover that is after importing a thousand
+        # foreign-language memories: doctor catches it eventually, but at
+        # store #N for small N a re-embed is free. Once per process, young
+        # stores only, and only when the configured models are English-only.
+        self._maybe_warn_language(content, result)
+
         if subcategory:
             result["subcategory"] = subcategory
         if valid_from:

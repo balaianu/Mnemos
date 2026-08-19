@@ -127,3 +127,76 @@ def test_doctor_quiet_with_multilingual_pair(tmp_path):
     _seed(m, ["styrelsemöte ärende förening"] * 5)
     report = m.doctor()
     assert not any("Language coverage" in i for i in report["issues"])
+
+
+# --- store-time early warning ------------------------------------------------
+
+def _english_models(monkeypatch):
+    import importlib
+    monkeypatch.setenv("MNEMOS_EMBED_MODEL", "BAAI/bge-small-en-v1.5")
+    monkeypatch.setenv("MNEMOS_EMBED_DIMS", "384")
+    monkeypatch.setenv("MNEMOS_RERANKER_MODEL",
+                       "Alibaba-NLP/gte-reranker-modernbert-base")
+    import mnemos.constants, mnemos.embed
+    importlib.reload(mnemos.constants); importlib.reload(mnemos.embed)
+    # These tests exercise the WARNING, not the encoder. Stub the embed call
+    # core.py imported, so no model loads and the vector width matches
+    # whatever the temp store was created with.
+    import mnemos.core
+    monkeypatch.setattr(mnemos.core, "embed",
+                        lambda texts, prefix="passage": [[0.1] * 1024
+                                                         for _ in texts])
+
+
+def _reset_models(monkeypatch):
+    import importlib
+    for k in ("MNEMOS_EMBED_MODEL", "MNEMOS_EMBED_DIMS", "MNEMOS_RERANKER_MODEL"):
+        monkeypatch.delenv(k, raising=False)
+    import mnemos.constants, mnemos.embed
+    importlib.reload(mnemos.constants); importlib.reload(mnemos.embed)
+
+
+def test_store_warns_early_on_foreign_content(tmp_path, monkeypatch):
+    """The wrong moment to learn your tier is wrong is after importing a
+    thousand memories. Store #1 is the right moment."""
+    _english_models(monkeypatch)
+    Mnemos._lang_warned = False
+    m = _mnemos(tmp_path)
+    r = m.store_memory(project="brf", content="kallelse till styrelsemöte i föreningen",
+                       skip_dedup=True)
+    assert "warning" in r and "English-only" in r["warning"]
+    _reset_models(monkeypatch)
+
+
+def test_store_warning_fires_once_per_process(tmp_path, monkeypatch):
+    _english_models(monkeypatch)
+    Mnemos._lang_warned = False
+    m = _mnemos(tmp_path)
+    r1 = m.store_memory(project="brf", content="ärende hos hyresnämnden", skip_dedup=True)
+    r2 = m.store_memory(project="brf", content="beslut om föreningsstämma", skip_dedup=True)
+    assert "English-only" in r1.get("warning", "")
+    assert "English-only" not in r2.get("warning", "")
+    _reset_models(monkeypatch)
+
+
+def test_store_silent_on_english_content(tmp_path, monkeypatch):
+    _english_models(monkeypatch)
+    Mnemos._lang_warned = False
+    m = _mnemos(tmp_path)
+    r = m.store_memory(project="dev", content="plain english content here",
+                       skip_dedup=True)
+    assert "English-only" not in r.get("warning", "")
+    _reset_models(monkeypatch)
+
+
+def test_store_silent_with_multilingual_models(tmp_path, monkeypatch):
+    _reset_models(monkeypatch)
+    import mnemos.core
+    monkeypatch.setattr(mnemos.core, "embed",
+                        lambda texts, prefix="passage": [[0.1] * 1024
+                                                         for _ in texts])
+    Mnemos._lang_warned = False
+    m = _mnemos(tmp_path)
+    r = m.store_memory(project="brf", content="kallelse till styrelsemöte",
+                       skip_dedup=True)
+    assert "English-only" not in r.get("warning", "")

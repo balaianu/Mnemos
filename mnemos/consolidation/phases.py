@@ -488,19 +488,64 @@ def merge_cluster(cluster_ids, mem_by_id):
     return current[0]["content"]
 
 
+# Hard bound on a merged/split memory's tag string. Before this existed, the
+# tag amplifier (union at merge x full copy to every split sibling, compounding
+# nightly) produced 275-char memories carrying 6KB of tags on a field store;
+# the v10.8.0 size guard measured content only and never saw them. The budget
+# is a backstop -- filter_chunk_tags' relevance rule is the real fix.
+TAG_BUDGET = 1024
+
+_TAG_TERM_RE = re.compile(r"[a-z0-9åäö]{3,}")
+
+
+def _tag_supported(tag, content_lower):
+    """A text supports a tag when the tag appears in it verbatim, or every
+    term of the tag (alphanumeric runs of 3+ chars) does."""
+    low = tag.lower()
+    if low in content_lower:
+        return True
+    terms = _TAG_TERM_RE.findall(low)
+    return bool(terms) and all(t in content_lower for t in terms)
+
+
+def filter_chunk_tags(chunk, all_tags, universal, budget=TAG_BUDGET):
+    """The tags one merged memory (or split sibling) may carry.
+
+    A tag survives when the chunk's own content supports it, or when EVERY
+    source in the cluster carried it (a universal tag describes the whole
+    cluster -- STRICTLY-PRIVATE, project markers -- and content-support alone
+    would strip those, which for privacy markers is a regression, not tidying).
+    A union without this rule is the tag amplifier: merge N memories, split
+    into k siblings, and every sibling claims all N topics while holding 1/k
+    of the content -- compounding each cycle as unions merge with unions.
+
+    Deterministic budget: universal tags first, then alphabetical, stop when
+    the joined string would exceed `budget`.
+    """
+    content_lower = chunk.lower()
+    kept = {t for t in all_tags
+            if t in universal or _tag_supported(t, content_lower)}
+    out, used = [], 0
+    for t in sorted(kept, key=lambda t: (t not in universal, t)):
+        cost = len(t) + (1 if out else 0)
+        if used + cost > budget:
+            break
+        out.append(t)
+        used += cost
+    return sorted(out)
+
+
 def apply_merge(conn, cluster_ids, merged_content, mem_by_id):
     """Store merged memory, archive originals. Returns new memory ID."""
     projects = [mem_by_id[mid]["project"] for mid in cluster_ids]
     project = max(set(projects), key=projects.count)
 
-    all_tags = set()
+    src_tag_sets = []
     for mid in cluster_ids:
         tags = mem_by_id[mid].get("tags", "") or ""
-        for t in tags.split(","):
-            t = t.strip()
-            if t:
-                all_tags.add(t)
-    all_tags.add("consolidated")
+        src_tag_sets.append({t.strip() for t in tags.split(",") if t.strip()})
+    all_tags = set().union(*src_tag_sets) if src_tag_sets else set()
+    universal = set.intersection(*src_tag_sets) if src_tag_sets else set()
 
     max_importance = max(mem_by_id[mid].get("importance", 5) for mid in cluster_ids)
     inherit_lock = 1 if any(mem_by_id[mid].get("consolidation_lock") for mid in cluster_ids) else 0
@@ -524,7 +569,6 @@ def apply_merge(conn, cluster_ids, merged_content, mem_by_id):
     # same write window.
     try:
         conn.execute("BEGIN")
-        tag_str = ",".join(sorted(all_tags))
 
         # Size-guard (v10.8.0): never emit an oversized merged memory. Split
         # losslessly into atomic siblings (no LLM, no fact loss); the primary
@@ -545,6 +589,13 @@ def apply_merge(conn, cluster_ids, merged_content, mem_by_id):
         new_ids = []
         n = len(chunks)
         for i, ch in enumerate(chunks):
+            # Each chunk carries only the tags its own content supports plus
+            # the cluster-universal ones -- never the raw union (see
+            # filter_chunk_tags for what the union did to field stores).
+            kept = filter_chunk_tags(ch, all_tags, universal)
+            if "consolidated" not in kept:
+                kept.append("consolidated")
+            tag_str = ",".join(kept)
             ctags = tag_str if n == 1 else f"{tag_str},split-part:{i + 1}/{n}"
             conn.execute(
                 "INSERT INTO memories (namespace, project, content, tags, importance, type, verified, "

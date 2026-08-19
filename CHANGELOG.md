@@ -4,6 +4,14 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.35.2] - 2026-08-19 (the tag amplifier)
+
+### Fixed
+- **Nyx no longer amplifies tags through merge and split.** Merge unioned every source's tags unbounded, and the size-guard split copied that full union to every sibling: a merge of N memories split into k pieces produced k memories each claiming all N topics while holding 1/k of the content, compounding nightly as unions merged with unions (field-measured: a 275-char sibling carrying 6KB of tags, sibling groups sharing byte-identical 77-tag strings, seeded by a 479-chunk ingestion's per-chunk tags). The v10.8.0 size guard measures content only, so it never saw them — and since `prep_memory_text` embeds retrieval-relevant tags, the unions also poisoned the affected vectors.
+- Each merged memory (and each split sibling) now carries only the tags its own content supports plus the cluster-universal ones — a tag every source carried describes the whole cluster, and pure content-support would strip privacy markers like `STRICTLY-PRIVATE` that legitimately ride on every source without appearing in any content. `TAG_BUDGET` (1024 chars, universal-first, deterministic) backstops the filter.
+
+6 regression tests. 401 pass.
+
 ## [10.35.1] - 2026-08-19 (the token id is the truth)
 
 ### Fixed

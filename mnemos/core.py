@@ -1845,15 +1845,28 @@ class Mnemos:
         # the same step.
         try:
             from .language import has_mojibake, repair_mojibake
-            damaged = [(mid, c, status) for mid, c, status in
-                       self.store.iter_all_contents(self.namespace)
+            rows = self.store.iter_all_contents(self.namespace,
+                                                 with_lock=True)
+            damaged = [(mid, c, status, lock) for mid, c, status, lock in rows
                        if has_mojibake(c)]
+            locked = [t for t in damaged if t[3]]
+            damaged = [t for t in damaged if not t[3]]
+            if locked:
+                # A memory can QUOTE mojibake to document it, and repairing
+                # the quote rewrites the evidence into a self-negating
+                # memory (field case). consolidation_lock is the existing
+                # "do not machine-rewrite this" bit, and repair honors it.
+                report["checks"].append(
+                    f"Mojibake in {len(locked)} consolidation-locked "
+                    "memories (" + ", ".join(f"#{t[0]}" for t in locked[:5])
+                    + "); left untouched. Locked memories are assumed to "
+                    "quote the damage deliberately.")
             if damaged:
                 if not migrate:
                     report["issues"].append(
                         f"{len(damaged)} memories contain mojibake "
                         "(UTF-8 decoded as Latin-1 at ingestion; ids "
-                        + ", ".join(f"#{m}" for m, _, _ in damaged[:8])
+                        + ", ".join(f"#{m}" for m, *_ in damaged[:8])
                         + ("..." if len(damaged) > 8 else "")
                         + "). CML operators inside them are invisible to the "
                         "operator map. Run `mnemos doctor --migrate` to apply "
@@ -1861,7 +1874,7 @@ class Mnemos:
                 else:
                     fixed = failed = 0
                     arch_repaired = False
-                    for mid, c, status in damaged:
+                    for mid, c, status, _lock in damaged:
                         repaired, changed = repair_mojibake(c)
                         if not changed:
                             failed += 1
@@ -1979,8 +1992,23 @@ class Mnemos:
                     f"Archived vector index is {arch_dims}-wide but the active "
                     f"index is {stored_dims}-wide: tier-2 recall "
                     "(expand_merged) cannot use the archived vectors. Run "
-                    "`mnemos reindex-archived --rebuild` to recreate it at "
-                    "the active width."
+                    "`mnemos reembed` (rebuilds both tiers since v10.34.1)."
+                )
+            # Width alone misses the dangerous case: a normalization or
+            # same-width model change leaves the geometry identical-looking
+            # while every archived vector is stale, and counting vectors
+            # reports the index "complete". Compare PROVENANCE. Field-
+            # reported after archived recall degraded under a green check.
+            from .embed import embed_model_id
+            arch_foreign = self.store.get_arch_provenance_mismatch(
+                embed_model_id())
+            if arch_foreign:
+                report["issues"].append(
+                    f"Archived vector provenance: {arch_foreign} tier-2 "
+                    "vectors were built as something other than the current "
+                    f"'{embed_model_id()}'. Tier-2 recall is silently "
+                    "degraded for them. Run `mnemos reembed` (rebuilds both "
+                    "tiers since v10.34.1)."
                 )
         except Exception as e:
             report["issues"].append(f"Dimension check failed: {e}")

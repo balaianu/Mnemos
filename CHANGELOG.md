@@ -4,6 +4,13 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.34.2] - 2026-08-19 (tier-2 provenance check; repair respects the lock)
+
+### Fixed
+- **Doctor now compares tier-2 PROVENANCE, not just width.** A normalization flip or same-width model change leaves the archived index geometrically identical while every archived vector is stale, and the completeness check counts vectors, so archived recall degraded under a green health check (field-reported, confirmed on 10.33.1 and 10.34.0). Doctor now reports tier-2 vectors whose recorded model differs from the current identity and points at `mnemos reembed`, which rebuilds both tiers since 10.34.1.
+- **The mojibake repair honors `consolidation_lock`.** A memory that QUOTES mojibake to document it must not have its evidence rewritten into a self-negating memory (field case). Locked memories are listed as a check and left untouched; the lock is the existing "do not machine-rewrite this" bit, applied consistently.
+
+2 regression tests. 390 pass.
 ## [10.34.1] - 2026-08-19 (reembed means the whole store)
 
 ### Fixed

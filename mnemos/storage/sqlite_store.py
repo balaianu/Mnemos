@@ -1890,7 +1890,17 @@ class SQLiteStore(MnemosStore):
 
     # --- Vector provenance ---
 
-    def iter_all_contents(self, namespace=None):
+    def get_arch_provenance_mismatch(self, current_model_id):
+        """Count tier-2 vectors whose recorded model differs from current."""
+        conn = self._get_conn()
+        try:
+            return conn.execute(
+                "SELECT count(*) FROM embed_meta_arch WHERE model IS NOT NULL "
+                "AND model != ?", (current_model_id,)).fetchone()[0]
+        except Exception:
+            return 0
+
+    def iter_all_contents(self, namespace=None, with_lock=False):
         """(id, content, status) for active AND archived memories.
 
         Doctor's data-quality scans must see the archived tier too: a
@@ -1898,9 +1908,15 @@ class SQLiteStore(MnemosStore):
         """
         conn = self._get_conn()
         ns = namespace or self.namespace
-        return [(r["id"], r["content"], r["status"]) for r in conn.execute(
-            "SELECT id, content, status FROM memories WHERE namespace = ? "
-            "AND status IN ('active','archived')", (ns,))]
+        cols = "id, content, status" + (
+            ", coalesce(consolidation_lock,0) AS lock" if with_lock else "")
+        rows = conn.execute(
+            f"SELECT {cols} FROM memories WHERE namespace = ? "
+            "AND status IN ('active','archived')", (ns,))
+        if with_lock:
+            return [(r["id"], r["content"], r["status"], bool(r["lock"]))
+                    for r in rows]
+        return [(r["id"], r["content"], r["status"]) for r in rows]
 
     def iter_active_contents(self, namespace=None):
         """(id, content) for every active memory; doctor's full-store scans."""

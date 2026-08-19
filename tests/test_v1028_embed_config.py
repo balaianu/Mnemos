@@ -179,7 +179,7 @@ def test_doctor_flags_stranded_archived_index(tmp_path):
     # Strand the ARCHIVED index at a foreign width; active stays at default.
     m.store.reset_arch_vec_index(1024)
     report = m.doctor()
-    assert any("Archived vector index" in i and "reindex-archived" in i
+    assert any("Archived vector index" in i and "reembed" in i
                for i in report["issues"])
 
 

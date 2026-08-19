@@ -323,3 +323,34 @@ def test_doctor_finds_mojibake_in_archived_memories(tmp_path):
     conn.commit()
     report = m.doctor(migrate=False)
     assert any("mojibake" in i for i in report["issues"])
+
+
+def test_locked_memories_are_never_repaired(tmp_path):
+    """A memory that QUOTES mojibake to document it must not have its
+    evidence rewritten into a self-negating memory (field case)."""
+    m = _mnemos(tmp_path)
+    conn = m.store._get_conn()
+    conn.execute(
+        "INSERT INTO memories (id, namespace, project, content, status, layer, "
+        "type, consolidation_lock) VALUES (1, 't', 'dev', "
+        "'W: ingest bug wrote â€” instead of the dash', 'active', 'semantic', "
+        "'learning', 1)")
+    conn.commit()
+    report = m.doctor(migrate=True)
+    assert not any("repaired mojibake" in x and " 1 " in x
+                   for x in report["migrations_applied"])
+    content = conn.execute("SELECT content FROM memories WHERE id=1").fetchone()[0]
+    assert "â€”" in content, "the quoted evidence must survive --migrate"
+    assert any("consolidation-locked" in c for c in report["checks"])
+
+
+def test_doctor_flags_stale_archived_provenance(tmp_path):
+    """Same-width staleness (normalization flip) degraded archived recall
+    under a green health check because the old check compared widths only."""
+    m = _mnemos(tmp_path)
+    conn = m.store._get_conn()
+    conn.execute("INSERT INTO embed_meta_arch (source_db, source_id, text_hash, model) "
+                 "VALUES ('memory', 1, 'h', 'intfloat/multilingual-e5-large+cmlnorm')")
+    conn.commit()
+    report = m.doctor()
+    assert any("Archived vector provenance" in i for i in report["issues"])

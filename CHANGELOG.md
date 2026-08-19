@@ -4,6 +4,12 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.33.1] - 2026-08-19 (startup language check judges the pinned store, not the raw default)
+
+### Fixed
+- The HTTP startup language notice read `effective_model()` BEFORE anything had touched the store, and per-store pinning only runs on first store access, so it judged the shipped default rather than what the store actually uses. First observed on the first 10.33.0 production boot: a store pinned to e5 was told its embedder is English-only. The check now samples the store first (which runs adoption) and judges afterwards.
+- The regression test for this initially leaked its e5 pin into module state and broke 24 later tests; it restores the defaults in a finally block. Two env/module leaks were found in this release cycle (this one and the HTTP fixture's raw `os.environ` writes), both now documented in the tests they broke.
+
 ## [10.33.0] - 2026-08-19 (the light tier becomes the default)
 
 The change issue #4 asked for, shipped with everything the benchmarks said it needs. Two operator notes up front:

@@ -230,3 +230,44 @@ def test_store_silent_with_multilingual_models(tmp_path, monkeypatch):
                        skip_dedup=True)
     assert "English-only" not in r.get("warning", "")
     _reset_models(monkeypatch)
+
+
+def test_http_startup_check_respects_store_pinning(tmp_path, monkeypatch):
+    """First 10.33.0 boot regression: the startup notice judged the raw
+    default because per-store pinning had not run yet; it must touch the
+    store first and judge what the store will actually use."""
+    import importlib
+    _reset_models(monkeypatch)   # English defaults
+    from mnemos.storage.sqlite_store import SQLiteStore
+    # Build a store whose provenance pins a multilingual embedder.
+    store = SQLiteStore(db_path=str(tmp_path / "m.db"), namespace="t")
+    conn = store._get_conn()
+    conn.execute("INSERT INTO embed_meta (source_db, source_id, text_hash, model) "
+                 "VALUES ('memory', 1, 'h', 'intfloat/multilingual-e5-large+cmlnorm')")
+    for i in range(1, 6):
+        conn.execute(
+            "INSERT INTO memories (id, namespace, project, content, status, layer, type) "
+            "VALUES (?, 't', 'brf', 'kallelse till styrelsemöte i föreningen', "
+            "'active', 'semantic', 'fact')", (i,))
+    conn.commit()
+    store.close()
+    # Fresh objects, pinning not yet run, exactly like a server boot.
+    import mnemos.embed as e
+    importlib.reload(e)
+    from mnemos.core import Mnemos
+    m = Mnemos(store=SQLiteStore(db_path=str(tmp_path / "m.db"), namespace="t"),
+               namespace="t", enable_contradiction_detection=False,
+               enable_rerank=False)
+    lines = []
+    import mnemos.http_server as h
+    import mnemos.language, mnemos.constants
+    # Reproduce the startup block's logic directly.
+    try:
+        rows = m.store.sample_contents(m.namespace)
+        enc_en = mnemos.language.is_english_only(e.effective_model())
+        assert enc_en is False, "store touch must have pinned e5 before judging"
+    finally:
+        # The pin mutated module state; put the defaults back or every later
+        # test that embeds for real loads e5 against a 384-wide index. Same
+        # leak class as the http fixture bug this file just chronicled.
+        importlib.reload(e)

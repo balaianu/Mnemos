@@ -176,11 +176,16 @@ def serve(http: str | None = None, unix: str | None = None, mnemos=None) -> None
         from .language import scan_contents, is_english_only
         from .embed import effective_model
         from . import constants as _c
+        # Touch the store FIRST: per-store pinning only runs on first store
+        # access, and judging effective_model() before that judges the raw
+        # default, not what this store will actually use. Epsilon's first
+        # 10.33.0 boot warned "embedder is English-only" about a store pinned
+        # to e5 for exactly this reason.
+        rows = mnemos.store.sample_contents(mnemos.namespace)
         enc_en = is_english_only(effective_model())
         rr_en = _c.DEFAULT_ENABLE_RERANK and is_english_only(_c.RERANKER_MODEL)
         if enc_en or rr_en:
-            affected, total = scan_contents(
-                mnemos.store.sample_contents(mnemos.namespace))
+            affected, total = scan_contents(rows)
             if total and affected / total > 0.10:
                 which = ("models are" if (enc_en and rr_en) else
                          "reranker is" if rr_en else "embedder is")

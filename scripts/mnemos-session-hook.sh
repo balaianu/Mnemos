@@ -48,8 +48,30 @@ MNEMOS_BIN="${MNEMOS_BIN:-mnemos}"
 STATE_DIR="${MNEMOS_SESSION_STATE_DIR:-/tmp/mnemos-session}"
 mkdir -p "$STATE_DIR" 2>/dev/null || true
 
+# Every invocation below is a standalone CLI process that cold-loads models
+# independently of the long-lived `serve` process, so bound it the same way:
+# no ONNX arena (short-lived process, arena growth is never repaid), and the
+# package's own pressure guard so a starved host degrades search to
+# vec-only then FTS5 instead of piling a cold model load onto it. Both
+# respect a value already set in the environment.
+export MNEMOS_DISABLE_MEM_ARENA="${MNEMOS_DISABLE_MEM_ARENA:-1}"
+export MNEMOS_MIN_FREE_MB="${MNEMOS_MIN_FREE_MB:-1500}"
+
+# Hard skip for genuinely starved hosts, where even an FTS-only python
+# process is unwelcome. Checked only by the branches that do heavy work:
+# stop is jq over the transcript (plus an opt-in `add` that MIN_FREE_MB
+# already degrades gracefully), and skipping it would silently cost the
+# session summary for no memory benefit.
+low_memory() {
+    local avail
+    avail=$(awk '/MemAvailable/{print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 99999)
+    [ "${avail:-99999}" -lt 800 ]
+}
+
 case "${1:-start}" in
     start)
+        if low_memory; then exit 0; fi
+
         # Clear any stale per-session marker (crash recovery)
         if [ -n "${CLAUDE_SESSION_ID:-}" ]; then
             rm -f "$STATE_DIR/${CLAUDE_SESSION_ID}.primed" 2>/dev/null || true
@@ -72,6 +94,7 @@ case "${1:-start}" in
         ;;
 
     prompt)
+        if low_memory; then exit 0; fi
         # First-prompt priming. Claude Code sends a JSON payload on stdin
         # with fields including `prompt` (the user's message) and
         # `session_id`. We run vec-search priming once per session using

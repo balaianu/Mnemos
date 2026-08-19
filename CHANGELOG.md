@@ -4,6 +4,11 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.32.3] - 2026-08-19 (session-hook pressure guard, done properly)
+
+### Fixed
+- `scripts/mnemos-session-hook.sh` gains the memory-pressure handling that a field deployment added locally, with its three defects fixed. (1) The hook now exports `MNEMOS_MIN_FREE_MB` (default 1500, existing values respected) so under pressure the CLI degrades search vec-only then FTS5 via the package's own guard instead of going silent; it also disables the ONNX arena for these short-lived CLI processes, where arena growth is never repaid. (2) The hard low-memory skip applies only to the `start` and `prompt` branches: `stop` is jq over the transcript plus an opt-in `add` that `MIN_FREE_MB` already degrades gracefully, and skipping it silently cost the session summary for zero memory benefit. (3) The MemAvailable read is crash-proof under `set -euo pipefail`: awk exiting 0 with no output left an empty string that blew up the integer comparison ("integer expression expected"); `${avail:-99999}` closes it.
+
 ## [10.32.2] - 2026-08-19 (the tier switch reaches the archived index; doctor respects pinning)
 
 Both field-reported from the first real tier switch on another host, hours after the tier documentation shipped.

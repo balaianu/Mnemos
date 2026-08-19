@@ -203,3 +203,27 @@ def test_doctor_dim_check_respects_pinning(tmp_path):
         from mnemos.constants import FASTEMBED_DIMS
         from mnemos.embed import embed_model_id
         e.adopt_store_config(embed_model_id(), FASTEMBED_DIMS)
+
+
+def test_reembed_rebuilds_the_archived_tier_too(tmp_path, monkeypatch):
+    """Three consecutive field migrations hand-fixed the archived index
+    because reembed only rebuilt the active tier while being documented as
+    THE migration command. It now covers both."""
+    import mnemos.core
+    monkeypatch.setattr(mnemos.core, "embed",
+                        lambda texts, prefix="passage": [[0.1] * 384
+                                                         for _ in texts])
+    m = _mnemos(tmp_path)
+    # Strand the archived index at a foreign width, then reembed.
+    m.store.reset_arch_vec_index(1024)
+    import os
+    os.environ["MNEMOS_EMBED_DIMS"] = "384"
+    import importlib, mnemos.constants, mnemos.embed
+    importlib.reload(mnemos.constants); importlib.reload(mnemos.embed)
+    try:
+        result = m.reembed(backup=False)
+        assert "archived_error" not in result, result
+        assert m.store.get_arch_vec_dims() == 384
+    finally:
+        del os.environ["MNEMOS_EMBED_DIMS"]
+        importlib.reload(mnemos.constants); importlib.reload(mnemos.embed)

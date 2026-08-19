@@ -310,3 +310,16 @@ def test_doctor_migrate_repairs_and_reembeds(tmp_path, monkeypatch):
     fixed = m.store._get_conn().execute(
         "SELECT content FROM memories WHERE id=1").fetchone()[0]
     assert "—" in fixed and "â€" not in fixed
+
+
+def test_doctor_finds_mojibake_in_archived_memories(tmp_path):
+    """The #254 case: a damaged ARCHIVED memory is still served by tier-2
+    recall, so the scan must see it."""
+    m = _mnemos(tmp_path)
+    conn = m.store._get_conn()
+    conn.execute(
+        "INSERT INTO memories (id, namespace, project, content, status, layer, type) "
+        "VALUES (1, 't', 'dev', 'trasig â€” arkiverad', 'archived', 'semantic', 'fact')")
+    conn.commit()
+    report = m.doctor(migrate=False)
+    assert any("mojibake" in i for i in report["issues"])

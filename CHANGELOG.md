@@ -4,6 +4,13 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.34.1] - 2026-08-19 (reembed means the whole store)
+
+### Fixed
+- **`mnemos reembed` now rebuilds the tier-2 archived index in the same run.** Three consecutive field migrations needed hand surgery on `embed_vec_arch` because reembed rebuilt only the active tier while every doc and doctor message called it THE migration command; 10.32.2's `reindex-archived --rebuild` existed but was a second command nobody was told to run. The archived index is part of the store, not an optional sidecar.
+- **The mojibake scan covers archived memories.** Field case: a damaged archived memory is still served by tier-2 recall, and the scan only iterated active rows, so it was never detected. Archived repairs write content directly (update() re-embeds into the active tier, the wrong index for them) and refresh their tier-2 vectors via reindex-archived's stale-hash pass in the same doctor --migrate run.
+
+2 regression tests. 388 pass.
 ## [10.34.0] - 2026-08-19 (store-path guard for uncalibrated rerankers; mojibake repair)
 
 ### Fixed

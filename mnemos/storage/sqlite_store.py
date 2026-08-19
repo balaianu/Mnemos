@@ -1890,6 +1890,18 @@ class SQLiteStore(MnemosStore):
 
     # --- Vector provenance ---
 
+    def iter_all_contents(self, namespace=None):
+        """(id, content, status) for active AND archived memories.
+
+        Doctor's data-quality scans must see the archived tier too: a
+        mojibake-damaged archived memory is still served by tier-2 recall.
+        """
+        conn = self._get_conn()
+        ns = namespace or self.namespace
+        return [(r["id"], r["content"], r["status"]) for r in conn.execute(
+            "SELECT id, content, status FROM memories WHERE namespace = ? "
+            "AND status IN ('active','archived')", (ns,))]
+
     def iter_active_contents(self, namespace=None):
         """(id, content) for every active memory; doctor's full-store scans."""
         conn = self._get_conn()

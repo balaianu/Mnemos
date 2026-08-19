@@ -1684,6 +1684,18 @@ class Mnemos:
                 break
 
         result.update({"reembedded": filled, "failed": failed})
+
+        # The tier-2 archived index is part of the store, not an optional
+        # sidecar: three consecutive field migrations needed hand surgery
+        # because this command rebuilt only the active tier while every doc
+        # and doctor message called it THE migration step. Rebuild the
+        # archived index at the same width and backfill it in the same run.
+        try:
+            self.store.reset_arch_vec_index(effective_dims())
+            arch = self.reindex_archived()
+            result["archived_reembedded"] = arch.get("embedded", arch)
+        except Exception as e:
+            result["archived_error"] = str(e)
         return result
 
     def embed_status(self) -> dict:
@@ -1833,27 +1845,47 @@ class Mnemos:
         # the same step.
         try:
             from .language import has_mojibake, repair_mojibake
-            damaged = [(mid, c) for mid, c in self.store.iter_active_contents(
-                           self.namespace) if has_mojibake(c)]
+            damaged = [(mid, c, status) for mid, c, status in
+                       self.store.iter_all_contents(self.namespace)
+                       if has_mojibake(c)]
             if damaged:
                 if not migrate:
                     report["issues"].append(
                         f"{len(damaged)} memories contain mojibake "
                         "(UTF-8 decoded as Latin-1 at ingestion; ids "
-                        + ", ".join(f"#{m}" for m, _ in damaged[:8])
+                        + ", ".join(f"#{m}" for m, _, _ in damaged[:8])
                         + ("..." if len(damaged) > 8 else "")
                         + "). CML operators inside them are invisible to the "
                         "operator map. Run `mnemos doctor --migrate` to apply "
                         "the reversible codec repair and re-embed them.")
                 else:
                     fixed = failed = 0
-                    for mid, c in damaged:
+                    arch_repaired = False
+                    for mid, c, status in damaged:
                         repaired, changed = repair_mojibake(c)
-                        if changed:
-                            self.update(mid, content=repaired)
-                            fixed += 1
-                        else:
+                        if not changed:
                             failed += 1
+                            continue
+                        if status == "active":
+                            self.update(mid, content=repaired)
+                        else:
+                            # update() re-embeds into the ACTIVE tier, which
+                            # is the wrong index for an archived memory (the
+                            # #254 case): write content directly and let
+                            # reindex-archived refresh the tier-2 vector via
+                            # its stale-hash pass below.
+                            conn = self.store.raw_connection()
+                            conn.execute(
+                                "UPDATE memories SET content = ? WHERE id = ?",
+                                (repaired, mid))
+                            conn.commit()
+                            arch_repaired = True
+                        fixed += 1
+                    if arch_repaired:
+                        try:
+                            self.reindex_archived()
+                        except Exception:
+                            pass
                     report["migrations_applied"].append(
                         f"repaired mojibake in {fixed} memories"
                         + (f" ({failed} did not round-trip cleanly and were "

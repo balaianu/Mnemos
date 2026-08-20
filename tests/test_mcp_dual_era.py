@@ -15,7 +15,7 @@ from tests.test_http_transport import _post, http_server  # noqa: F401 (fixture)
 
 MODERN = "2026-07-28"
 LEGACY = "2024-11-05"
-INTERMEDIATE = ["2025-06-18", "2025-03-26"]
+INTERMEDIATE = ["2025-11-25", "2025-06-18", "2025-03-26"]
 PROTOCOL_KEY = "io.modelcontextprotocol/protocolVersion"
 SERVER_INFO_KEY = "io.modelcontextprotocol/serverInfo"
 
@@ -184,3 +184,69 @@ def test_initialize_echoes_an_intermediate_proposal(http_server):
                        "clientInfo": {"name": "probe", "version": "0"}},
         })
         assert body["result"]["protocolVersion"] == version
+
+
+# The gate is a range, not a list. Refusing every revision we had not heard of
+# broke working clients twice; the wire format is stable across the handshake
+# era, so an unnamed revision inside the range is served rather than rejected.
+
+
+def test_unnamed_in_range_revision_is_served(http_server):
+    """A revision nobody has told this server about, between legacy and modern."""
+    status, body = _post_with_header(http_server, "2025-09-09")
+    assert status == 200
+    assert body["result"]["tools"]
+
+
+def test_revision_newer_than_modern_is_refused(http_server):
+    """Beyond PROTOCOL_MODERN we cannot know what changed -- let them downgrade."""
+    status, body = _post_with_header(http_server, "2027-01-01")
+    assert status == 400
+    assert body["error"]["code"] == -32022
+    assert MODERN in body["error"]["data"]["supported"]
+
+
+def test_predates_legacy_and_malformed_are_refused(http_server):
+    for bogus in ["1900-01-01", "not-a-version", "2025-6-18", "", "2025-06-18-extra"]:
+        if not bogus:
+            continue
+        status, _body = _post_with_header(http_server, bogus)
+        assert status == 400, f"{bogus!r} should be refused, got {status}"
+
+
+def test_predicate_boundaries():
+    from mnemos.mcp_server import protocol_supported, PROTOCOL_MODERN, PROTOCOL_LEGACY
+    assert protocol_supported(PROTOCOL_MODERN)
+    assert protocol_supported(PROTOCOL_LEGACY)
+    assert protocol_supported("2025-11-25")
+    assert protocol_supported("2025-09-09")
+    assert not protocol_supported("2024-11-04")   # one day before the floor
+    assert not protocol_supported("2026-07-29")   # one day past the ceiling
+    assert not protocol_supported("20250618")
+    assert not protocol_supported(None)
+    assert not protocol_supported("")
+
+
+def test_rejected_request_does_not_poison_the_next_on_one_connection(http_server):
+    """Regression: the 400 path used to return before reading the body, so the
+    next request on a keep-alive connection was parsed as a continuation of it.
+    """
+    import http.client
+    from urllib.parse import urlparse
+    parsed = urlparse(http_server)
+    conn = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=10)
+    payload = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
+    # 1: refused on version, body deliberately left for the server to drain.
+    conn.request("POST", "/", body=payload, headers={
+        "Content-Type": "application/json", "MCP-Protocol-Version": "2027-01-01"})
+    first = conn.getresponse()
+    first.read()
+    assert first.status == 400
+    # 2: same connection, valid. Must be answered on its own merits.
+    conn.request("POST", "/", body=payload, headers={
+        "Content-Type": "application/json", "MCP-Protocol-Version": MODERN})
+    second = conn.getresponse()
+    body = json.loads(second.read())
+    conn.close()
+    assert second.status == 200, f"second request desynced: {second.status}"
+    assert body["result"]["tools"]

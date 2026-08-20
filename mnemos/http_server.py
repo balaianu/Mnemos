@@ -47,6 +47,7 @@ from .mcp_server import (
     SUPPORTED_VERSIONS,
     build_mnemos,
     handle_message,
+    protocol_supported,
 )
 
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
@@ -78,11 +79,21 @@ class MnemosHTTPHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         self._session_id = ""
+        # Read the body before anything can return early. Leaving it unread
+        # desyncs a keep-alive connection: the next request line is parsed as a
+        # continuation of the body still sitting in the socket buffer, so one
+        # refused request takes the following one down with it.
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        raw = self.rfile.read(length) if length else b""
+
         # MCP-Protocol-Version is required on Streamable HTTP since 2025-06-18;
         # absent means a legacy client and is accepted, present-but-unsupported
         # is refused up front (400, same error shape as the JSON-RPC layer).
         proto = self.headers.get("MCP-Protocol-Version")
-        if proto and proto not in SUPPORTED_VERSIONS:
+        if proto and not protocol_supported(proto):
             self._send_json(400, {
                 "jsonrpc": "2.0", "id": None,
                 "error": {
@@ -92,11 +103,6 @@ class MnemosHTTPHandler(BaseHTTPRequestHandler):
                 },
             })
             return
-        try:
-            length = int(self.headers.get("Content-Length") or 0)
-        except ValueError:
-            length = 0
-        raw = self.rfile.read(length) if length else b""
         try:
             msg = json.loads(raw)
         except Exception:

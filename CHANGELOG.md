@@ -4,6 +4,16 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.37.0] - 2026-08-20 (the version gate inverts)
+
+### Changed
+- **The protocol-version gate is a range, not an allowlist.** 10.36.0 shipped a hardcoded list of accepted revisions and 10.36.1 extended it; both were wrong, because the list can only ever name the revisions its author happened to know about, and anything outside it was refused with `-32022` (a hard 400 on Streamable HTTP). `2025-11-25` was the second working revision to be rejected that way. Since every revision in the handshake era shares one `tools/list`/`tools/call` wire format, the gate now accepts any dated revision from `PROTOCOL_LEGACY` up to `PROTOCOL_MODERN` inclusive, named or not, and serves the unnamed ones through the legacy path. Revisions newer than `PROTOCOL_MODERN` are still refused, since their changes are unknowable to this build and `-32022` carries the known list so the client can downgrade. Malformed and pre-legacy values are still refused. `KNOWN_VERSIONS` remains as what `server/discover` advertises -- documentation, not the gate -- and now names `2025-11-25`.
+
+### Fixed
+- **A refused request no longer poisons the next one on the same connection.** The Streamable HTTP handler returned its 400 for an unsupported version header *before* reading the request body, so on a keep-alive connection the unread body stayed in the socket buffer and the next request line was parsed as a continuation of it: `Bad request syntax ('{"jsonrpc": ...}POST / HTTP/1.1')`, and a valid request got a spurious 400. The body is now read before anything can return early, which removes the ordering hazard rather than patching this one instance of it. Regression test drives two requests down one `http.client` connection and fails against the previous code.
+
+5 new tests, 419 pass.
+
 ## [10.36.1] - 2026-08-20
 
 ### Fixed

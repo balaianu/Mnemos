@@ -155,6 +155,21 @@ NLI_FINDER_MAX_PAIRS = int(os.environ.get("MNEMOS_NLI_FINDER_MAX_PAIRS", "200"))
 # legacy cosine mode.
 CONTRADICT_MIN_SIM = float(os.environ.get("MNEMOS_CONTRADICT_MIN_SIM", "0.60"))
 CONTRADICT_MAX_SIM = float(os.environ.get("MNEMOS_CONTRADICT_MAX_SIM", "0.85"))
+# An absolute floor is a property of the embedding model, not of the corpus,
+# so no constant serves bge-small, e5-large and gte alike. 0.60 was calibrated
+# on a space that is not e5's: measured on a 746-row e5-large store, the
+# same-project cosines span [0.74, 0.97] with a median of 0.86, so 0.60 admits
+# 100.0% of 65,960 pairs and phase 4 degenerates into an exhaustive scan.
+# Self-calibrate instead: take the floor from the store's own distribution, so
+# the gate keeps its selectivity across any embedder. Setting
+# MNEMOS_CONTRADICT_MIN_SIM pins an absolute floor and turns calibration off.
+CONTRADICT_MIN_SIM_EXPLICIT = "MNEMOS_CONTRADICT_MIN_SIM" in os.environ
+CONTRADICT_SIM_PERCENTILE = float(
+    os.environ.get("MNEMOS_CONTRADICT_SIM_PERCENTILE", "99.0"))
+# Never let calibration admit fewer than this many pairs on a small store,
+# where a high percentile of few pairs is noise rather than selection.
+CONTRADICT_MIN_CANDIDATES = int(
+    os.environ.get("MNEMOS_CONTRADICT_MIN_CANDIDATES", "20"))
 
 # --- Zero-LLM daily cycle (v10.17.0). Evidence: benchmarks/weave-bench
 # (phase-2 NLI gate validated on production clusters) and

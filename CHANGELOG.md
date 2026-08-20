@@ -4,6 +4,20 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.38.0] - 2026-08-20 (the floor calibrates itself)
+
+Both items reported by a fleet host running a 600-memory Swedish/English store
+on e5-large + jina-v2, and both reproduced here before being fixed.
+
+### Changed
+- **The phase-4 contradiction floor calibrates to the store instead of being a constant.** `CONTRADICT_MIN_SIM=0.60` is a property of the embedding space it was tuned on, and it is inert on e5-large: measured on a 746-row production store, same-project cosines span [0.7405, 0.9734] with a median of 0.8598, so the floor admitted **100.0% of 65,960 pairs** and the nominator degenerated into an exhaustive scan -- the expensive NLI pass then ran on everything, which is why one host disabled its nightly cycle rather than let it grind. The floor is now taken from the store's own distribution (`MNEMOS_CONTRADICT_SIM_PERCENTILE`, default p99), which keeps the gate selective whatever the embedder. On the same store that is 9,490 candidate pairs down to 95, a 100x reduction. Setting `MNEMOS_CONTRADICT_MIN_SIM` still pins an absolute floor and turns calibration off; calibration never drops *below* that floor, and `MNEMOS_CONTRADICT_MIN_CANDIDATES` (default 20) stops a high percentile of few pairs from starving a small store.
+- **The cycle log now reports what the floor admitted.** A nominator passing nearly every pair is self-evidently broken but nothing said so, so the defect was invisible except as runtime. Phase 4 logs the effective floor and the admitted share, and warns explicitly above 50%.
+
+### Fixed
+- **`scripts/clean_tag_amplifier.py` silently stripped classification markers.** `PROTECTED` was hardcoded to two tags standing in for cluster-universality, which cannot be recomputed post-hoc -- but the marker vocabulary is per-store, so any store using different ones lost them on the very run meant to repair damage, indistinguishably from a stripped inherited topic. On the reporting host that was 164 rows across five markers, and 111 of its 182 "repairs" were pure marker loss. Now: `--protected` extends the set, likely markers are auto-nominated (ALL-CAPS or classification-sounding), and the dry run separates amplifier repair from marker loss instead of reporting one conflated row count.
+
+6 new tests, 425 pass.
+
 ## [10.37.0] - 2026-08-20 (the version gate inverts)
 
 ### Changed

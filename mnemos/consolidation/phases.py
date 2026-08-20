@@ -43,6 +43,8 @@ from ..constants import (
     FASTEMBED_MODEL, FASTEMBED_DIMS, CML_MODE,
     DEFAULT_NAMESPACE,
     CONTRADICT_MIN_SIM, CONTRADICT_MAX_SIM,
+    CONTRADICT_MIN_SIM_EXPLICIT, CONTRADICT_SIM_PERCENTILE,
+    CONTRADICT_MIN_CANDIDATES,
     NYX_CONTRADICT_FINDER_DEFAULT, NLI_FINDER_THRESHOLD, NLI_FINDER_MAX_PAIRS,
     TIGHT_THRESHOLD, TOPIC_THRESHOLD, WEAVE_MIN_SIMILARITY, WEAVE_TOP_K,
     NYX_PACKET_SIZE, NORMAL_MAX_CALLS, SURGE_MAX_CALLS, SURGE_THRESHOLD,
@@ -1060,6 +1062,35 @@ def _parse_weave_result(text):
 # Phase 4: Contradiction Scan
 # =============================================================================
 
+def calibrate_contradict_floor(similarities):
+    """Pick the phase-4 floor from the store's own similarity distribution.
+
+    A fixed cosine floor is only selective in the embedding space it was
+    tuned for. On e5-large the same-project cosines occupy a high, narrow
+    band, so the 0.60 default admits every pair and the nominator becomes an
+    exhaustive scan -- the expensive NLI pass then runs on everything. Taking
+    a high percentile of the actual distribution keeps the gate selective
+    whatever the embedder, and costs one pass over values the caller has
+    already computed.
+
+    Falls back to the absolute constant when the operator pinned one, or when
+    there are too few pairs for a percentile to mean anything.
+    """
+    if CONTRADICT_MIN_SIM_EXPLICIT or not similarities:
+        return CONTRADICT_MIN_SIM
+    if len(similarities) <= CONTRADICT_MIN_CANDIDATES:
+        return CONTRADICT_MIN_SIM
+    floor = float(np.percentile(similarities, CONTRADICT_SIM_PERCENTILE))
+    # A percentile can still leave too few pairs on a small store; back off to
+    # whichever floor admits at least CONTRADICT_MIN_CANDIDATES of them.
+    admitted = sum(1 for v in similarities if v >= floor)
+    if admitted < CONTRADICT_MIN_CANDIDATES:
+        floor = sorted(similarities, reverse=True)[CONTRADICT_MIN_CANDIDATES - 1]
+    # Never calibrate BELOW the absolute floor: that would admit more than the
+    # old behaviour, which is the opposite of the point.
+    return max(floor, CONTRADICT_MIN_SIM)
+
+
 def select_contradict_candidates(ids, sim_matrix, mem_by_id, mode="cosine",
                                  min_sim=None, max_sim=None):
     """Same-project pair selection for the phase-4 contradiction scan.
@@ -1070,10 +1101,16 @@ def select_contradict_candidates(ids, sim_matrix, mem_by_id, mode="cosine",
     ("X is 64GB" vs "X is 32GB" sits above 0.85 cosine). In nli mode the
     line-level finder scores the pairs, so the ceiling has no job.
     """
-    if min_sim is None:
-        min_sim = CONTRADICT_MIN_SIM
     if max_sim is None:
         max_sim = CONTRADICT_MAX_SIM
+    same_project = [
+        float(sim_matrix[i][j])
+        for i, mid_a in enumerate(ids)
+        for j in range(i + 1, len(ids))
+        if mem_by_id[mid_a]["project"] == mem_by_id[ids[j]]["project"]
+    ]
+    if min_sim is None:
+        min_sim = calibrate_contradict_floor(same_project)
     pairs = []
     for i, mid_a in enumerate(ids):
         for j in range(i + 1, len(ids)):
@@ -1128,6 +1165,23 @@ def phase_contradict(conn, mergeable_embeddings, mem_by_id, is_surge,
         "MNEMOS_NYX_CONTRADICT_FINDER", NYX_CONTRADICT_FINDER_DEFAULT).lower()
     candidates = select_contradict_candidates(
         ids, sim_matrix, mem_by_id, mode=finder_mode)
+    # A nominator that admits nearly every pair is broken, but nothing said so
+    # before: the 0.60 default is inert on e5-large and phase 4 quietly ran an
+    # exhaustive scan. Report the floor and what it let through so the next
+    # embedder change is visible in the log rather than only in the runtime.
+    total_pairs = sum(
+        1 for i, mid_a in enumerate(ids)
+        for j in range(i + 1, len(ids))
+        if mem_by_id[mid_a]["project"] == mem_by_id[ids[j]]["project"]
+    )
+    if total_pairs:
+        floor = min((c[2] for c in candidates), default=float("nan"))
+        share = 100.0 * len(candidates) / total_pairs
+        log(f"  floor {floor:.4f} admitted {len(candidates)}/{total_pairs} "
+            f"same-project pairs ({share:.1f}%)")
+        if share > 50.0:
+            log("  WARNING: floor admitted over half the pairs; it is not "
+                "selective in this embedding space")
 
     # Scan memory (v10.17.3): pairs already judged or already linked are
     # excluded before any scoring. Without this every COMPATIBLE verdict

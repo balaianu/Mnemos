@@ -42,7 +42,12 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import __version__
-from .mcp_server import build_mnemos, handle_message
+from .mcp_server import (
+    ERR_UNSUPPORTED_PROTOCOL,
+    SUPPORTED_VERSIONS,
+    build_mnemos,
+    handle_message,
+)
 
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
@@ -73,6 +78,20 @@ class MnemosHTTPHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         self._session_id = ""
+        # MCP-Protocol-Version is required on Streamable HTTP since 2025-06-18;
+        # absent means a legacy client and is accepted, present-but-unsupported
+        # is refused up front (400, same error shape as the JSON-RPC layer).
+        proto = self.headers.get("MCP-Protocol-Version")
+        if proto and proto not in SUPPORTED_VERSIONS:
+            self._send_json(400, {
+                "jsonrpc": "2.0", "id": None,
+                "error": {
+                    "code": ERR_UNSUPPORTED_PROTOCOL,
+                    "message": "Unsupported protocol version",
+                    "data": {"supported": SUPPORTED_VERSIONS, "requested": proto},
+                },
+            })
+            return
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:

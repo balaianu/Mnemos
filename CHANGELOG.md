@@ -4,6 +4,15 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.36.0] - 2026-08-20 (the dual-era handshake)
+
+### Added
+- **Dual-era MCP protocol support (2026-07-28 alongside legacy 2024-11-05).** The 2026-07-28 spec revision removed the initialize handshake in favor of per-request versioning; Mnemos now serves both eras from the one transport-agnostic dispatch. New: `server/discover` (MUST in 2026-07-28) advertising `supportedVersions`, capabilities, instructions, and cacheability; per-request `_meta` version gate returning `UnsupportedProtocolVersionError` (-32022) with the supported list as retry data; every result carries `resultType: "complete"` and server identity in `_meta` (both additive, so legacy clients are unaffected); `tools/list` is deterministic-ordered and carries `ttlMs`/`cacheScope` per the CacheableResult interface.
+- **initialize negotiates instead of asserting.** The server echoes the client's proposed `protocolVersion` when supported and answers with the legacy revision otherwise, instead of hardcoding 2024-11-05 regardless of what the client asked for.
+- **Streamable HTTP validates MCP-Protocol-Version.** A request carrying an unsupported version header is refused with 400 and the -32022 error body; absent means legacy and is accepted (required on this transport since spec 2025-06-18).
+
+9 dual-era tests through the real HTTP transport. 410 pass.
+
 ## [10.35.2] - 2026-08-19 (the tag amplifier)
 
 ### Fixed

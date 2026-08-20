@@ -338,6 +338,24 @@ def _maybe_warmup(mnemos):
             sys.stderr.write(f"Mnemos: reranker warmup failed: {e}\n")
 
 
+# --- MCP dual-era protocol support (2026-07-28 + legacy 2024-11-05) --------
+# 2026-07-28 removed the initialize handshake: modern clients declare their
+# version per-request in _meta and probe with server/discover; legacy clients
+# still open with initialize, so absence of _meta is never a mismatch.
+PROTOCOL_MODERN = "2026-07-28"
+PROTOCOL_LEGACY = "2024-11-05"
+SUPPORTED_VERSIONS = [PROTOCOL_MODERN, PROTOCOL_LEGACY]
+SERVER_INSTRUCTIONS = "Persistent memory for AI agents: store, search, get, update memories plus bulk rewrite and tag discovery."
+META_PROTOCOL = "io.modelcontextprotocol/protocolVersion"
+META_SERVER_INFO = "io.modelcontextprotocol/serverInfo"
+CACHE_TTL_MS = 3600000
+ERR_UNSUPPORTED_PROTOCOL = -32022  # renumbered from -32004 in 2026-07-28
+
+
+def _server_info():
+    return {"name": "mnemos", "version": __version__}
+
+
 def handle_message(mnemos, msg):
     """Transport-agnostic JSON-RPC dispatch.
 
@@ -345,6 +363,23 @@ def handle_message(mnemos, msg):
     id-less messages (nothing to send). Transports own framing and I/O;
     everything protocol-shaped lives here.
     """
+    response = _dispatch(mnemos, msg)
+    # 2026-07-28 additive result envelope; legacy clients ignore the extra
+    # keys. An initialize result (has protocolVersion) stays legacy-shaped.
+    if response is not None:
+        res = response.get("result")
+        if isinstance(res, dict) and "protocolVersion" not in res:
+            response = dict(response)
+            res = dict(res)
+            res.setdefault("resultType", "complete")
+            meta = dict(res.get("_meta") or {})
+            meta.setdefault(META_SERVER_INFO, _server_info())
+            res["_meta"] = meta
+            response["result"] = res
+    return response
+
+
+def _dispatch(mnemos, msg):
     method = msg.get("method", "")
     id_ = msg.get("id")
     params = msg.get("params", {})
@@ -352,20 +387,48 @@ def handle_message(mnemos, msg):
     if id_ is None:
         return None
 
+    requested = ((params or {}).get("_meta") or {}).get(META_PROTOCOL)
+    if requested is not None and requested not in SUPPORTED_VERSIONS:
+        return {
+            "jsonrpc": "2.0", "id": id_,
+            "error": {
+                "code": ERR_UNSUPPORTED_PROTOCOL,
+                "message": "Unsupported protocol version",
+                "data": {"supported": SUPPORTED_VERSIONS, "requested": requested},
+            },
+        }
+
+    if method == "server/discover":
+        return {"jsonrpc": "2.0", "id": id_, "result": {
+            "supportedVersions": SUPPORTED_VERSIONS,
+            "capabilities": {"tools": {}},
+            "instructions": SERVER_INSTRUCTIONS,
+            "ttlMs": CACHE_TTL_MS,
+            "cacheScope": "public",
+        }}
+
     if method == "initialize":
         response = {
             "jsonrpc": "2.0", "id": id_,
             "result": {
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": (
+                    params.get("protocolVersion")
+                    if params.get("protocolVersion") in SUPPORTED_VERSIONS
+                    else PROTOCOL_LEGACY
+                ),
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "mnemos", "version": __version__},
+                "serverInfo": _server_info(),
             },
         }
         _maybe_warmup(mnemos)
         return response
 
     if method == "tools/list":
-        return {"jsonrpc": "2.0", "id": id_, "result": {"tools": TOOL_DEFINITIONS}}
+        return {"jsonrpc": "2.0", "id": id_, "result": {
+            "tools": sorted(TOOL_DEFINITIONS, key=lambda t: t.get("name", "")),
+            "ttlMs": CACHE_TTL_MS,
+            "cacheScope": "public",
+        }}
 
     if method == "tools/call":
         tool_name = params.get("name", "")

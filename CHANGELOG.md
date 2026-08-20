@@ -4,6 +4,11 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.36.1] - 2026-08-20
+
+### Fixed
+- **The version gate no longer refuses revisions Mnemos can actually speak.** 10.36.0 introduced the protocol-version check with `SUPPORTED_VERSIONS = [2026-07-28, 2024-11-05]`, which made the two intermediate published revisions (2025-03-26, 2025-06-18) a hard failure: `-32022` on the per-request `_meta` gate, and a 400 on Streamable HTTP. Before the gate existed the header was ignored entirely, so those clients worked — the check turned a working integration into a broken one, which is the opposite of what a compatibility feature should do. Both revisions still open with `initialize` and share the legacy `tools/list`/`tools/call` wire format, so the legacy path already serves them correctly; they are now listed as supported, `server/discover` advertises all four, and `initialize` echoes an intermediate proposal instead of downgrading it. 4 new tests, 414 pass.
+
 ## [10.36.0] - 2026-08-20 (the dual-era handshake)
 
 ### Added

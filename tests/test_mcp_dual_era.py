@@ -15,6 +15,7 @@ from tests.test_http_transport import _post, http_server  # noqa: F401 (fixture)
 
 MODERN = "2026-07-28"
 LEGACY = "2024-11-05"
+INTERMEDIATE = ["2025-06-18", "2025-03-26"]
 PROTOCOL_KEY = "io.modelcontextprotocol/protocolVersion"
 SERVER_INFO_KEY = "io.modelcontextprotocol/serverInfo"
 
@@ -65,7 +66,7 @@ def test_initialize_echoes_a_supported_modern_proposal(http_server):
 def test_initialize_falls_back_on_unknown_proposal(http_server):
     _status, _headers, body = _post(http_server, {
         "jsonrpc": "2.0", "id": 1, "method": "initialize",
-        "params": {"protocolVersion": "2025-03-26", "capabilities": {}},
+        "params": {"protocolVersion": "1900-01-01", "capabilities": {}},
     })
     assert body["result"]["protocolVersion"] == LEGACY
 
@@ -129,3 +130,57 @@ def test_tool_call_works_under_the_modern_envelope(http_server):
     assert result["_meta"][SERVER_INFO_KEY]["name"] == "mnemos"
     assert not result.get("isError")
     assert "content" in result
+
+
+# The intermediate published revisions (2025-03-26, 2025-06-18) sit between the
+# two eras. They are served by the legacy path, but they must not be refused:
+# before the version gate existed the header was ignored, so rejecting them
+# would silently break clients that used to work.
+
+
+def _post_with_header(url, version):
+    data = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}).encode()
+    req = urllib.request.Request(
+        url, data=data, method="POST",
+        headers={"Content-Type": "application/json", "MCP-Protocol-Version": version},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status, json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read())
+
+
+def test_discover_advertises_every_supported_revision(http_server):
+    _status, _headers, body = _post(http_server, {
+        "jsonrpc": "2.0", "id": 1, "method": "server/discover", "params": {},
+    })
+    advertised = body["result"]["supportedVersions"]
+    assert advertised == [MODERN, *INTERMEDIATE, LEGACY]
+
+
+def test_intermediate_versions_pass_the_http_header_gate(http_server):
+    for version in INTERMEDIATE:
+        status, body = _post_with_header(http_server, version)
+        assert status == 200, f"{version} was refused with {status}"
+        assert body["result"]["tools"]
+
+
+def test_intermediate_versions_pass_the_meta_gate(http_server):
+    for version in INTERMEDIATE:
+        _status, _headers, body = _post(http_server, {
+            "jsonrpc": "2.0", "id": 1, "method": "tools/list",
+            "params": {"_meta": {PROTOCOL_KEY: version}},
+        })
+        assert "error" not in body, f"{version} was refused: {body.get('error')}"
+        assert body["result"]["tools"]
+
+
+def test_initialize_echoes_an_intermediate_proposal(http_server):
+    for version in INTERMEDIATE:
+        _status, _headers, body = _post(http_server, {
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": version, "capabilities": {},
+                       "clientInfo": {"name": "probe", "version": "0"}},
+        })
+        assert body["result"]["protocolVersion"] == version

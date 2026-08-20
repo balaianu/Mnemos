@@ -344,7 +344,13 @@ def _maybe_warmup(mnemos):
 # still open with initialize, so absence of _meta is never a mismatch.
 PROTOCOL_MODERN = "2026-07-28"
 PROTOCOL_LEGACY = "2024-11-05"
-SUPPORTED_VERSIONS = [PROTOCOL_MODERN, PROTOCOL_LEGACY]
+# The intermediate published revisions still open with initialize, and their
+# tools/list + tools/call wire format is identical to the legacy one, so a
+# client negotiating either is served correctly by the legacy path. They are
+# listed because refusing a version we can in fact speak turns a working
+# integration into a hard 400 on the HTTP transport for no benefit.
+PROTOCOL_INTERMEDIATE = ["2025-06-18", "2025-03-26"]
+SUPPORTED_VERSIONS = [PROTOCOL_MODERN, *PROTOCOL_INTERMEDIATE, PROTOCOL_LEGACY]
 SERVER_INSTRUCTIONS = "Persistent memory for AI agents: store, search, get, update memories plus bulk rewrite and tag discovery."
 META_PROTOCOL = "io.modelcontextprotocol/protocolVersion"
 META_SERVER_INFO = "io.modelcontextprotocol/serverInfo"

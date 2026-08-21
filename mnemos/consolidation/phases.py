@@ -1355,6 +1355,26 @@ def phase_contradict(conn, mergeable_embeddings, mem_by_id, is_surge,
 
     log(f"  {len(candidates)} candidate contradiction pairs")
 
+    # The verdict links carry constant strengths (0.8 contradicts, 0.1 cleared),
+    # so the cosine that admitted a pair is lost the moment it is judged. Without
+    # that pairing there is evidence for what the floor COSTS but none for where
+    # it should SIT. Record both; behaviour is unchanged.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS contradict_audit (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_id INTEGER NOT NULL,
+            target_id INTEGER NOT NULL,
+            cosine REAL NOT NULL,
+            verdict TEXT NOT NULL,
+            judged_at TEXT DEFAULT (datetime('now','localtime'))
+        )
+    """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_contradict_audit_verdict "
+        "ON contradict_audit(verdict)"
+    )
+    conn.commit()
+
     for mid_a, mid_b, cos in candidates:
         mem_a = mem_by_id[mid_a]
         mem_b = mem_by_id[mid_b]
@@ -1394,6 +1414,12 @@ def phase_contradict(conn, mergeable_embeddings, mem_by_id, is_surge,
             continue
 
         classification, explanation = _parse_contradict(result)
+        conn.execute(
+            "INSERT INTO contradict_audit "
+            "(source_id, target_id, cosine, verdict) VALUES (?, ?, ?, ?)",
+            (mid_a, mid_b, float(cos), classification),
+        )
+
 
         if classification == "SUPERSEDED":
             # Blast-radius guard: the classifier's verdict is derived from

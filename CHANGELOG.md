@@ -4,6 +4,11 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.38.1] - 2026-08-21 (record what the floor admitted, not just how much)
+
+### Added
+- **Phase 4 records the cosine that admitted each pair alongside the verdict it received.** The floor is now calibrated (10.38.0) but nothing measures whether it is calibrated *correctly*: the verdict links carry constant strengths (0.8 for `contradicts`, 0.1 for `contradiction-cleared`), so the score that let a pair through is discarded the moment it is judged. That leaves evidence for what a floor **costs** and none for where it should **sit**, and any further tightening trades known cost for unknown recall. A `contradict_audit` table (`source_id`, `target_id`, `cosine`, `verdict`, `judged_at`) now pairs the two, written at the single point where every judged pair is classified, so one cycle produces a labelled set and the operator can ask the store directly: what is the lowest cosine that ever produced a real contradiction? Everything below it is demonstrably safe to drop. Behaviour is otherwise unchanged, and the row is written regardless of `--execute` so a dry run can calibrate without mutating the store.
+
 ## [10.38.0] - 2026-08-20 (the floor calibrates itself)
 
 Both items reported by a fleet host running a 600-memory Swedish/English store

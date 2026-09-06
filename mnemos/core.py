@@ -19,6 +19,7 @@ import re
 import sqlite3
 import threading
 from contextlib import contextmanager
+from datetime import datetime
 from typing import Optional
 
 from .storage.base import MnemosStore, Memory
@@ -454,8 +455,11 @@ class Mnemos:
                     for l in self.store.get_links([oid]).get(oid, []):
                         other = l.get("linked_id")
                         if other and other != oid and other not in child_ids:
+                            source, target = child_ids[0], other
+                            if l.get("direction") == "incoming":
+                                source, target = other, child_ids[0]
                             self.store.store_link(
-                                child_ids[0], other,
+                                source, target,
                                 l.get("relation", "related"),
                                 l.get("strength", 0.5),
                             )
@@ -1024,6 +1028,8 @@ class Mnemos:
         # originating result so callers can tell immediate links apart
         # from transitive ones.
         if include_linked and link_map:
+            today = datetime.now().date().isoformat()
+            linked_cache = dict(memories)
             # Cap total linked nodes surfaced per result to keep response
             # sizes bounded. Graph blowup at depth=3 in a well-linked
             # store can easily reach hundreds; this cap keeps responses
@@ -1049,7 +1055,11 @@ class Mnemos:
                             local_link_cache.update(newlinks)
                         except Exception:
                             local_link_cache[node_id] = []
-                    for link in local_link_cache.get(node_id, []):
+                    node_links = local_link_cache.get(node_id, [])
+                    missing = {link["linked_id"] for link in node_links} - linked_cache.keys()
+                    fetched = self.store.get_memories_by_ids(list(missing)) if missing else {}
+                    linked_cache.update({mid: fetched.get(mid) for mid in missing})
+                    for link in node_links:
                         lid = link["linked_id"]
                         if lid in visited:
                             continue
@@ -1058,10 +1068,20 @@ class Mnemos:
                         # result set - callers already have it, don't double
                         if lid in already_in_results:
                             continue
+                        linked = linked_cache.get(lid)
+                        if linked is None or linked.status != "active":
+                            continue
+                        if valid_only and (
+                            (linked.valid_until is not None and linked.valid_until <= today)
+                            or (linked.valid_from is not None and linked.valid_from > today)
+                        ):
+                            continue
                         collected.append({
                             "id": lid,
                             "relation": link["relation"],
                             "strength": link["strength"],
+                            **{key: link[key] for key in
+                               ("source_id", "target_id", "direction") if key in link},
                             "distance": dist + 1,  # hops from root
                             "_via": node_id,       # which node reached it
                         })
@@ -1069,13 +1089,12 @@ class Mnemos:
                         if len(collected) >= MAX_LINKED_PER_RESULT:
                             break
 
-                # Bulk-fetch all collected memory bodies in one query
+                # Bodies were fetched in batches before traversal so invalid
+                # nodes cannot serve as bridges to otherwise valid content.
                 if collected:
-                    linked_ids = [c["id"] for c in collected]
-                    fetched = self.store.get_memories_by_ids(linked_ids)
                     summaries = []
                     for c in collected:
-                        mem = fetched.get(c["id"]) or memories.get(c["id"])
+                        mem = linked_cache.get(c["id"])
                         if not mem:
                             continue
                         # Search results are status-filtered; the link graph
@@ -1088,6 +1107,8 @@ class Mnemos:
                             "project": mem.project,
                             "relation": c["relation"],
                             "strength": c["strength"],
+                            **{key: c[key] for key in
+                               ("source_id", "target_id", "direction") if key in c},
                             "distance": c["distance"],
                             "content": (mem.content or "")[:200],
                         }
@@ -1195,6 +1216,10 @@ class Mnemos:
         return memory.to_dict()
 
     def update(self, mid: int, **fields) -> dict:
+        # Reading is access, not evidence that a fact remains true. The
+        # caller explicitly confirms after checking the fact with a source.
+        if fields.pop("confirmed", False):
+            fields["last_confirmed"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         if not fields:
             return {"error": "no fields to update"}
 
@@ -1203,8 +1228,8 @@ class Mnemos:
             if bool_field in fields:
                 fields[bool_field] = 1 if fields[bool_field] else 0
 
-        # Re-embed if content/tags/type/layer change
-        needs_embed = any(k in fields for k in ("content", "tags", "type", "layer"))
+        # Keep every field used by prep_memory_text in this invalidation set.
+        needs_embed = any(k in fields for k in ("project", "content", "tags", "type", "layer"))
         embedding = None
         thash = None
         if needs_embed:

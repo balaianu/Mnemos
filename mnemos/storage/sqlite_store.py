@@ -751,12 +751,15 @@ class SQLiteStore(MnemosStore):
         if increment_access:
             conn.execute(
                 "UPDATE memories SET access_count = access_count + 1, "
-                "last_accessed = datetime('now', 'localtime'), "
-                "last_confirmed = datetime('now', 'localtime') WHERE id = ?",
-                (mid,),
+                "last_accessed = datetime('now', 'localtime') "
+                "WHERE id = ? AND namespace = ?",
+                (mid, self.namespace),
             )
             conn.commit()
-        row = conn.execute("SELECT * FROM memories WHERE id = ?", (mid,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM memories WHERE id = ? AND namespace = ?",
+            (mid, self.namespace),
+        ).fetchone()
         if not row:
             return None
         return self._row_to_memory(row)
@@ -784,12 +787,18 @@ class SQLiteStore(MnemosStore):
         if not conn.in_transaction:
             conn.execute("BEGIN IMMEDIATE")
         try:
+            if not conn.execute(
+                "SELECT 1 FROM memories WHERE id = ? AND namespace = ?",
+                (mid, self.namespace),
+            ).fetchone():
+                conn.rollback()
+                return False
             rowcount = 0
             if safe_fields:
                 set_clause = ", ".join(f"{k} = ?" for k in safe_fields.keys())
-                params = list(safe_fields.values()) + [mid]
+                params = list(safe_fields.values()) + [mid, self.namespace]
                 cur = conn.execute(
-                    f"UPDATE memories SET {set_clause}, updated_at = datetime('now', 'localtime') WHERE id = ?",
+                    f"UPDATE memories SET {set_clause}, updated_at = datetime('now', 'localtime') WHERE id = ? AND namespace = ?",
                     params,
                 )
                 rowcount = cur.rowcount
@@ -811,6 +820,8 @@ class SQLiteStore(MnemosStore):
 
     def delete_memory(self, mid: int, hard: bool = False) -> bool:
         conn = self._get_conn()
+        if self.get_memory(mid, increment_access=False) is None:
+            return False
         if hard:
             join_col = self._get_vec_join_col()
             # Remove embedding first
@@ -920,55 +931,57 @@ class SQLiteStore(MnemosStore):
     def search_vec(self, embedding, namespace=None, project=None, subcategory=None,
                    layer=None, type_filter=None, status="active", valid_only=False,
                    limit=50):
-        conn = self._get_conn()
-        ns = namespace or self.namespace
-        join_col = self._get_vec_join_col()
+        return self._search_vec_filtered(
+            embedding, namespace=namespace, project=project,
+            subcategory=subcategory, layer=layer, type_filter=type_filter,
+            status=status, valid_only=valid_only, limit=limit,
+        )
 
-        # Brute-force vec search (sqlite-vec)
+    def _search_vec_filtered(self, embedding, namespace=None, project=None,
+                             subcategory=None, layer=None, type_filter=None,
+                             status="active", valid_only=False, limit=50,
+                             archived=False):
+        """Select eligible vector IDs before KNN, in both active and archived indexes.
+
+        Filtering a fixed global candidate pool afterwards loses valid hits
+        whenever nearer vectors belong to another namespace/project. vec0's
+        primary-key IN subquery restricts the KNN candidate set itself.
+        """
+        if limit <= 0:
+            return []
+        conn = self._get_conn()
+        vec_table = "embed_vec_arch" if archived else "embed_vec"
+        meta_table = "embed_meta_arch" if archived else "embed_meta"
+        join_col = _arch_join_col(conn) if archived else self._get_vec_join_col()
+        clauses = ["em.source_db = ?", "m.namespace = ?"]
+        params = [self.SOURCE_KEY, namespace or self.namespace]
+        for column, value in (("project", project), ("subcategory", subcategory),
+                              ("layer", layer), ("type", type_filter)):
+            if value:
+                clauses.append(f"m.{column} = ?")
+                params.append(value)
+        if status != "all":
+            clauses.append("m.status = ?")
+            params.append(status)
+        if valid_only:
+            clauses.extend([
+                "(m.valid_until IS NULL OR m.valid_until > date('now', 'localtime'))",
+                "(m.valid_from IS NULL OR m.valid_from <= date('now', 'localtime'))",
+            ])
         rows = conn.execute(
             f"""SELECT em.source_id, ev.distance
-               FROM embed_vec ev
-               JOIN embed_meta em ON em.id = ev.{join_col}
-               WHERE em.source_db = ? AND ev.embedding MATCH ? AND k = ?
-               ORDER BY ev.distance""",
-            (self.SOURCE_KEY, _serialize_vec(embedding), limit * 3),
+                FROM {vec_table} ev
+                JOIN {meta_table} em ON em.id = ev.{join_col}
+                WHERE ev.embedding MATCH ? AND k = ?
+                  AND ev.{join_col} IN (
+                      SELECT em.id FROM {meta_table} em
+                      JOIN memories m ON m.id = em.source_id
+                      WHERE {" AND ".join(clauses)}
+                  )
+                ORDER BY ev.distance, em.source_id""",
+            [_serialize_vec(embedding), limit] + params,
         ).fetchall()
-
-        if not rows:
-            return []
-
-        # Filter by namespace + other criteria
-        candidate_ids = [r["source_id"] for r in rows]
-        ph = ",".join("?" for _ in candidate_ids)
-        filter_params = list(candidate_ids) + [ns]
-        filter_clause = " AND namespace = ?"
-        if status != "all":
-            filter_clause += " AND status = ?"
-            filter_params.append(status)
-        if project:
-            filter_clause += " AND project = ?"
-            filter_params.append(project)
-        if subcategory:
-            filter_clause += " AND subcategory = ?"
-            filter_params.append(subcategory)
-        if layer:
-            filter_clause += " AND layer = ?"
-            filter_params.append(layer)
-        if type_filter:
-            filter_clause += " AND type = ?"
-            filter_params.append(type_filter)
-        if valid_only:
-            filter_clause += (" AND (valid_until IS NULL OR valid_until > date('now', 'localtime'))"
-                              " AND (valid_from IS NULL OR valid_from <= date('now', 'localtime'))")
-
-        active = set(
-            r[0] for r in conn.execute(
-                f"SELECT id FROM memories WHERE id IN ({ph}){filter_clause}",
-                filter_params,
-            ).fetchall()
-        )
-        results = [(r["source_id"], r["distance"]) for r in rows if r["source_id"] in active]
-        return results[:limit]
+        return [(r["source_id"], r["distance"]) for r in rows]
 
     # --- Tier-2 archived index (v10.7.0) ---
 
@@ -998,6 +1011,8 @@ class SQLiteStore(MnemosStore):
         original's vector for tier-2 recall instead of deleting it. Returns
         False if the memory had no active embedding to move.
         """
+        if self.get_memory(mid, increment_access=False) is None:
+            return False
         return move_embedding_to_archive_conn(self._get_conn(), mid,
                                               source_key=self.SOURCE_KEY)
 
@@ -1010,44 +1025,11 @@ class SQLiteStore(MnemosStore):
         in primary search, so consolidation that dropped a detail no longer
         makes that detail unrecallable.
         """
-        conn = self._get_conn()
-        ns = namespace or self.namespace
-        arch_col = _arch_join_col(conn)
-        rows = conn.execute(
-            f"""SELECT em.source_id, ev.distance
-               FROM embed_vec_arch ev
-               JOIN embed_meta_arch em ON em.id = ev.{arch_col}
-               WHERE em.source_db = ? AND ev.embedding MATCH ? AND k = ?
-               ORDER BY ev.distance""",
-            (self.SOURCE_KEY, _serialize_vec(embedding), limit * 3),
-        ).fetchall()
-        if not rows:
-            return []
-        candidate_ids = [r["source_id"] for r in rows]
-        ph = ",".join("?" for _ in candidate_ids)
-        params = list(candidate_ids) + [ns]
-        clause = " AND namespace = ? AND status = 'archived'"
-        if project:
-            clause += " AND project = ?"
-            params.append(project)
-        if subcategory:
-            clause += " AND subcategory = ?"
-            params.append(subcategory)
-        if layer:
-            clause += " AND layer = ?"
-            params.append(layer)
-        if type_filter:
-            clause += " AND type = ?"
-            params.append(type_filter)
-        if valid_only:
-            clause += (" AND (valid_until IS NULL OR valid_until > date('now', 'localtime'))"
-                       " AND (valid_from IS NULL OR valid_from <= date('now', 'localtime'))")
-        keep = set(
-            r[0] for r in conn.execute(
-                f"SELECT id FROM memories WHERE id IN ({ph}){clause}", params
-            ).fetchall()
+        return self._search_vec_filtered(
+            embedding, namespace=namespace, project=project,
+            subcategory=subcategory, layer=layer, type_filter=type_filter,
+            status="archived", valid_only=valid_only, limit=limit, archived=True,
         )
-        return [(r["source_id"], r["distance"]) for r in rows if r["source_id"] in keep][:limit]
 
     def archived_embed_count(self) -> int:
         conn = self._get_conn()
@@ -1093,7 +1075,10 @@ class SQLiteStore(MnemosStore):
             return {}
         conn = self._get_conn()
         ph = ",".join("?" for _ in ids)
-        rows = conn.execute(f"SELECT * FROM memories WHERE id IN ({ph})", ids).fetchall()
+        rows = conn.execute(
+            f"SELECT * FROM memories WHERE id IN ({ph}) AND namespace = ?",
+            list(ids) + [self.namespace],
+        ).fetchall()
         return {r["id"]: self._row_to_memory(r) for r in rows}
 
     def count_active(self, namespace: Optional[str] = None) -> int:
@@ -1107,6 +1092,9 @@ class SQLiteStore(MnemosStore):
 
     def store_link(self, source_id, target_id, relation_type, strength=0.5):
         conn = self._get_conn()
+        endpoints = self.get_memories_by_ids([source_id, target_id])
+        if any(mid not in endpoints for mid in (source_id, target_id)):
+            raise ValueError("Link endpoints must exist in the store namespace")
         conn.execute(
             "INSERT OR IGNORE INTO memory_links (source_id, target_id, relation_type, strength) "
             "VALUES (?, ?, ?, ?)",
@@ -1121,11 +1109,14 @@ class SQLiteStore(MnemosStore):
         ph = ",".join("?" for _ in memory_ids)
         id_list = list(memory_ids)
         rows = conn.execute(
-            f"""SELECT source_id, target_id, relation_type, strength
-                FROM memory_links
-                WHERE source_id IN ({ph}) OR target_id IN ({ph})
+            f"""SELECT l.source_id, l.target_id, l.relation_type, l.strength
+                FROM memory_links l
+                JOIN memories src ON src.id = l.source_id
+                JOIN memories tgt ON tgt.id = l.target_id
+                WHERE (source_id IN ({ph}) OR target_id IN ({ph}))
+                  AND src.namespace = ? AND tgt.namespace = ?
                 ORDER BY strength DESC""",
-            id_list + id_list,
+            id_list + id_list + [self.namespace, self.namespace],
         ).fetchall()
         link_map = {}
         id_set = set(memory_ids)
@@ -1135,6 +1126,9 @@ class SQLiteStore(MnemosStore):
                     link_map.setdefault(a, []).append({
                         "linked_id": b,
                         "relation": rtype,
+                        "source_id": src,
+                        "target_id": tgt,
+                        "direction": "outgoing" if a == src else "incoming",
                         "strength": round(strength or 0.5, 2),
                     })
         return link_map
@@ -1159,6 +1153,8 @@ class SQLiteStore(MnemosStore):
         consolidation pipeline marked as no longer current.
         """
         conn = self._get_conn()
+        if self.get_memory(memory_id, increment_access=False) is None:
+            return []
         row = conn.execute(
             "SELECT source_ids, consolidation_type FROM nyx_insights WHERE memory_id = ?",
             (memory_id,),
@@ -1174,8 +1170,8 @@ class SQLiteStore(MnemosStore):
             where_extra = (" AND (valid_until IS NULL OR valid_until > date('now', 'localtime'))"
                            " AND (valid_from IS NULL OR valid_from <= date('now', 'localtime'))")
         rows = conn.execute(
-            f"SELECT * FROM memories WHERE id IN ({ph}){where_extra} ORDER BY created_at DESC",
-            source_ids,
+            f"SELECT * FROM memories WHERE id IN ({ph}) AND namespace = ?{where_extra} ORDER BY created_at DESC",
+            source_ids + [self.namespace],
         ).fetchall()
         return [self._row_to_memory(r) for r in rows]
 
@@ -1414,13 +1410,15 @@ class SQLiteStore(MnemosStore):
         # snippet() token count is approximate. ~6 chars/token average.
         tokens = max(8, min(64, chars // 6))
         ph = ",".join("?" for _ in ids)
-        params = [fts_query] + list(ids)
+        params = [fts_query] + list(ids) + [self.namespace]
         try:
             rows = conn.execute(
                 f"""SELECT fts.rowid AS id,
                            snippet(memories_fts, 0, '⟪', '⟫', ' … ', {tokens}) AS snip
                     FROM memories_fts fts
-                    WHERE memories_fts MATCH ? AND fts.rowid IN ({ph})""",
+                    JOIN memories m ON m.id = fts.rowid
+                    WHERE memories_fts MATCH ? AND fts.rowid IN ({ph})
+                      AND m.namespace = ?""",
                 params,
             ).fetchall()
         except sqlite3.OperationalError:

@@ -4,6 +4,41 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.39.0] - 2026-09-06
+
+### Fixed
+- Directional links now carry `source_id`, `target_id`, and `direction` in
+  search results and linked summaries. The stored relation always describes
+  source -> target; an incoming `superseded_by` link no longer lacks the
+  information needed to distinguish the replacement from the obsolete fact.
+  Oversized-memory remediation preserves direction when copying these links.
+- SQLite direct ID reads, updates (including embedding-only updates), deletes,
+  bulk fetches, snippets, and archive moves are namespace-scoped. Link creation
+  rejects missing or foreign endpoints; link and merge-source reads filter
+  legacy cross-namespace references.
+- Active and archived vector search restrict eligible vector IDs before KNN.
+  Namespace, project, category, status, and validity filters cannot lose all
+  results because unrelated nearer vectors filled a fixed global pool.
+- `valid_only=True` also filters expired and future-dated linked memories.
+  Invalid or archived nodes cannot serve as bridges during multi-hop expansion.
+- `memory_get` updates access telemetry without changing `last_confirmed`.
+  Existing confirmation dates are preserved, not retroactively reinterpreted.
+- Project-only updates regenerate embeddings and their provenance hashes,
+  matching the project field already included by `prep_memory_text`.
+
+### Added
+- Explicit confirmation through `memory_update(id=..., confirmed=true)`,
+  Python `Mnemos.update(..., confirmed=True)`, or `mnemos update ID --confirm`.
+  Use only after checking a source or receiving explicit user confirmation.
+- Synthetic regression coverage for namespace boundaries, link direction,
+  validity traversal, filtered vector recall, confirmation, and embedding drift.
+
+Validation: 448 tests pass, including 23 new regression cases.
+
+No schema migration or model configuration change. See
+[`docs/memory-correctness.md`](docs/memory-correctness.md) for client semantics
+and upgrade notes.
+
 ## [10.38.1] - 2026-08-21 (record what the floor admitted, not just how much)
 
 ### Added

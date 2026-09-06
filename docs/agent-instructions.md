@@ -58,8 +58,13 @@ them proactively.
 ### When to update
 - If you find a memory is wrong or outdated, call `memory_update` with
   the corrected fields rather than storing a new conflicting memory
-- If you confirm a memory is still current, it is fine to leave it
-  alone; the system tracks access patterns automatically
+- After verifying a memory against a source or explicit user confirmation,
+  call `memory_update(id=..., confirmed=true)` to record that verification
+- Reading a memory only updates access telemetry, never confirmation
+- Read directional links as `source_id --relation--> target_id`; check
+  `direction` before interpreting an incoming `superseded_by` relationship
+- Use `valid_only=true` when current validity matters; linked content follows
+  the same validity filter
 
 ### What NOT to store
 - Third-party claims as fact (attribute them: "user X said Y")
@@ -120,8 +125,13 @@ them proactively.
 ### When to update
 - If you find a memory is wrong or outdated, call `memory_update` with
   the corrected fields rather than storing a new conflicting memory
-- If you confirm a memory is still current, it is fine to leave it
-  alone; the system tracks access patterns automatically
+- After verifying a memory against a source or explicit user confirmation,
+  call `memory_update(id=..., confirmed=true)` to record that verification
+- Reading a memory only updates access telemetry, never confirmation
+- Read directional links as `source_id --relation--> target_id`; check
+  `direction` before interpreting an incoming `superseded_by` relationship
+- Use `valid_only=true` when current validity matters; linked content follows
+  the same validity filter
 
 ### What NOT to store
 - Third-party claims as fact (attribute them: "user X said Y")

@@ -134,7 +134,7 @@ TOOL_DEFINITIONS = [
                 "type": {"type": "string", "enum": list(sorted(VALID_TYPES))},
                 "layer": {"type": "string", "enum": list(sorted(VALID_LAYERS))},
                 "status": {"type": "string", "default": "active"},
-                "valid_only": {"type": "boolean", "default": False, "description": "Exclude memories past their valid_until"},
+                "valid_only": {"type": "boolean", "default": False, "description": "Exclude expired and not-yet-valid memories, including linked expansion"},
                 "search_mode": {"type": "string", "enum": ["fts", "vec", "hybrid"]},
                 "limit": {"type": "integer", "default": 20, "maximum": 50},
                 "expand_merged": {"type": "boolean", "default": False, "description": "Tier-2 recall: enrich consolidated memories with their source originals (filtered to currently valid ones)"},
@@ -185,7 +185,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "memory_get",
-        "description": "Get a memory by ID. Bumps access count and importance at thresholds.",
+        "description": "Get a memory by ID in the current namespace. Bumps access count and importance at thresholds; does not confirm that its claims remain true.",
         "inputSchema": {
             "type": "object",
             "properties": {"id": {"type": "integer"}},
@@ -209,6 +209,7 @@ TOOL_DEFINITIONS = [
                 "subcategory": {"type": "string"},
                 "valid_from": {"type": "string"},
                 "valid_until": {"type": "string"},
+                "confirmed": {"type": "boolean", "description": "Set true only after verifying the memory against a source or explicit user confirmation. Records last_confirmed now; ordinary reads do not."},
                 "consolidation_lock": {"type": "boolean", "description": _LOCK_DESCRIPTION_UPDATE},
             },
             "required": ["id"],

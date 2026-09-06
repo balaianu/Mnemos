@@ -68,7 +68,10 @@ The fundamental unit. Has:
 - **Importance**: 1-10, dynamically bumped on access
 - **Validity**: `valid_from`, `valid_until` (optional time-bound truths)
 - **State**: `status` (active/archived), `verified`, `consolidation_lock`
-- **Telemetry**: `access_count`, `last_accessed`, `last_confirmed`
+- **Access telemetry**: `access_count`, `last_accessed`
+- **Explicit verification**: `last_confirmed`, recorded by
+  `memory_update(confirmed=true)` after checking a source, never by a read.
+  See [memory correctness semantics](memory-correctness.md).
 
 ### Memory link
 A typed relationship between two memories: `related`, `contradicts`, `supports`, etc. Stored with a strength (0-1).

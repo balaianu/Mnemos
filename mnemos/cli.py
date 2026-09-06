@@ -83,6 +83,8 @@ def cmd_get(mnemos, args):
 
 def cmd_update(mnemos, args):
     fields = {}
+    if getattr(args, "confirm", False):
+        fields["confirmed"] = True
     for k in ("content", "project", "tags", "importance", "status", "type",
               "layer", "subcategory", "valid_from", "valid_until"):
         v = getattr(args, k, None)
@@ -349,6 +351,8 @@ def main(argv=None):
     # update
     p = sub.add_parser("update", help="Update a memory")
     p.add_argument("id", type=int)
+    p.add_argument("--confirm", action="store_true",
+                   help="Record explicit verification now, not merely a read")
     p.add_argument("--content")
     p.add_argument("--project", "-p")
     p.add_argument("--tags", "-t")

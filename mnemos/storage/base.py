@@ -98,7 +98,10 @@ class MnemosStore(ABC):
     @abstractmethod
     def update_memory(self, mid: int, fields: dict, embedding: Optional[list] = None,
                       text_hash: Optional[str] = None) -> bool:
-        """Update specified fields. If content/tags/type/layer change, re-embed."""
+        """Update fields and supplied embedding atomically where supported.
+
+        Core regenerates embeddings when project/content/tags/type/layer change.
+        """
 
     @abstractmethod
     def delete_memory(self, mid: int, hard: bool = False) -> bool:
@@ -158,7 +161,11 @@ class MnemosStore(ABC):
     @abstractmethod
     def get_links(self, memory_ids: list) -> dict:
         """Fetch all links involving the given memory IDs.
-        Returns {memory_id: [{linked_id, relation, strength}, ...]}.
+
+        Returns {memory_id: [{linked_id, relation, strength, source_id,
+        target_id, direction}, ...]}. The stored relation always reads
+        source_id -> target_id. direction is outgoing/incoming relative
+        to the requested memory, not an inversion of the relation name.
         """
 
     # --- Consolidation support ---

@@ -37,6 +37,8 @@ different results.
   --verified`; it was store-time only before.
 
 
+## [10.39.2] - 2026-09-07 (review follow-ups)
+
 ### Fixed
 - `store_link` returns False instead of raising when an endpoint is missing
   or foreign. 10.39.0 introduced the `ValueError`, and none of the six call
@@ -79,6 +81,8 @@ different results.
   now recorded as one: on stores where consolidation leaves links pointing at
   merged originals, depth 2 and 3 expansion reaches less than before.
 
+
+## [10.39.1] - 2026-09-07 (compact links)
 
 ### Changed
 - Search results and linked summaries no longer include Nyx audit links

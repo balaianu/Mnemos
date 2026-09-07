@@ -68,7 +68,9 @@ store default, so a memory whose validity has ended (for example after a
 Phase 4 `EVOLVED` verdict set its `valid_until`) is neither a duplicate of nor
 a contradiction to a fresh statement of the current fact. Pass
 `valid_only=False` (`--include-expired` on the CLI) for history. Direct reads
-by ID are unaffected.
+by ID are unaffected. A date set by mistake is removed with
+`memory_update(id=..., valid_until=null)` or `mnemos update ID --clear
+valid_until` (10.40.1); the memory returns to default search immediately.
 
 ## Access and confirmation
 

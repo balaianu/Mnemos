@@ -93,6 +93,8 @@ def cmd_update(mnemos, args):
         v = getattr(args, k, None)
         if v is not None:
             fields[k] = v
+    for k in getattr(args, "clear", None) or []:
+        fields[k] = None
     result = mnemos.update(args.id, **fields)
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
@@ -371,6 +373,9 @@ def main(argv=None):
     p.add_argument("--subcategory", "--sub")
     p.add_argument("--valid-from")
     p.add_argument("--valid-until")
+    p.add_argument("--clear", action="append",
+                   choices=["valid_from", "valid_until", "subcategory"],
+                   help="Unset a field (repeatable); clearing valid_until restores a memory to default search")
     p.set_defaults(fn=cmd_update)
 
     # delete

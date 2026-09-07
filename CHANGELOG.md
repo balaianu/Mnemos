@@ -4,6 +4,19 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.40.1] - 2026-09-07 (validity can be cleared)
+
+### Fixed
+- **No sanctioned way to unset `valid_until`.** Both `memory_update` and
+  `mnemos update` dropped `None`, so once a date was on a memory, whether by
+  hand or by a Phase 4 `EVOLVED` verdict later judged wrong, it could only be
+  moved, never removed. With 10.40.0 defaulting `valid_only` to True that
+  meant the memory silently left every default search for good. The MCP tool
+  now treats `null` or `""` on `valid_from`, `valid_until` and `subcategory`
+  as "clear" (the schema admits null; omitting the key still leaves the field
+  alone), and the CLI gains `--clear FIELD`, repeatable, combinable with other
+  updates. 10 new tests, 487 pass.
+
 ## [10.40.0] - 2026-09-07 (current by default, confirmation has producers)
 
 Minor bump: two defaults change and clients that relied on them will see

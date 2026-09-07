@@ -207,9 +207,9 @@ TOOL_DEFINITIONS = [
                 "status": {"type": "string", "enum": ["active", "archived"]},
                 "type": {"type": "string", "enum": list(sorted(VALID_TYPES))},
                 "layer": {"type": "string", "enum": list(sorted(VALID_LAYERS))},
-                "subcategory": {"type": "string"},
-                "valid_from": {"type": "string"},
-                "valid_until": {"type": "string"},
+                "subcategory": {"type": ["string", "null"], "description": "null or empty string clears it"},
+                "valid_from": {"type": ["string", "null"], "description": "ISO date; null or empty string clears it"},
+                "valid_until": {"type": ["string", "null"], "description": "ISO date; null or empty string clears it, which brings an expired memory back into default (valid_only) search"},
                 "verified": {"type": "boolean", "description": "Mark the memory as verified against a source or by the user. Also records last_confirmed."},
                 "confirmed": {"type": "boolean", "description": "Record last_confirmed now. Implied by a content change or verified=true; pass false to suppress that for mechanical edits, true to confirm without changing anything. Ordinary reads never confirm."},
                 "consolidation_lock": {"type": "boolean", "description": _LOCK_DESCRIPTION_UPDATE},
@@ -286,11 +286,23 @@ def tool_get(mnemos, params):
     return mnemos.get(mid)
 
 
+# Fields a caller may want to unset. null or "" clears them; omitting the key
+# leaves them alone. Every other field treats None as "not provided".
+NULLABLE_FIELDS = frozenset({"valid_from", "valid_until", "subcategory"})
+
+
 def tool_update(mnemos, params):
     mid = params.get("id")
     if mid is None:
         return {"error": "id is required"}
-    fields = {k: v for k, v in params.items() if k != "id" and v is not None}
+    fields = {}
+    for key, value in params.items():
+        if key == "id":
+            continue
+        if key in NULLABLE_FIELDS and (value is None or value == ""):
+            fields[key] = None
+        elif value is not None:
+            fields[key] = value
     return mnemos.update(mid, **fields)
 
 

@@ -141,6 +141,7 @@ TOOL_DEFINITIONS = [
                 "snippet_chars": {"type": "integer", "minimum": 50, "maximum": 2000, "description": "If set, replace result content with a query-matched window of ~this many characters (FTS5 snippet for FTS hits, head slice for vec-only hits). Major token-budget saver when hits are inside large consolidated memories."},
                 "include_linked": {"type": "boolean", "default": False, "description": "Fold linked memories into each result as summaries. BFS traversal up to linked_depth hops. Saves round-trips when tracing relationships."},
                 "linked_depth": {"type": "integer", "default": 1, "minimum": 1, "maximum": 3, "description": "When include_linked=true, how many hops to traverse. 1 = direct links only (default). 2-3 = transitive links; capped at 30 total linked nodes per result to prevent graph explosion. Each linked entry carries `distance` (hops from root) and optional `via` for depth>1 transitive links."},
+                "include_audit_links": {"type": "boolean", "default": False, "description": "Also return Nyx audit links (contradiction-cleared). Off by default: they record that a pair was judged, not a relationship, and dominate link counts on mature stores."},
             },
             "required": ["query"],
         },
@@ -249,6 +250,7 @@ def tool_search(mnemos, params):
         snippet_chars=params.get("snippet_chars"),
         include_linked=params.get("include_linked", False),
         linked_depth=params.get("linked_depth", 1),
+        include_audit_links=params.get("include_audit_links", False),
     )
 
 

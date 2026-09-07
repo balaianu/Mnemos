@@ -159,8 +159,9 @@ class MnemosStore(ABC):
         """Store a relationship between two memories."""
 
     @abstractmethod
-    def get_links(self, memory_ids: list) -> dict:
-        """Fetch all links involving the given memory IDs.
+    def get_links(self, memory_ids: list, include_audit: bool = False) -> dict:
+        """Fetch links involving the given memory IDs. Relations listed in
+        AUDIT_LINK_RELATIONS are omitted unless include_audit is True.
 
         Returns {memory_id: [{linked_id, relation, strength, source_id,
         target_id, direction}, ...]}. The stored relation always reads

@@ -18,6 +18,13 @@ name. Do not interpret the name as a statement from the current search hit to
 its neighbour without checking direction. Linked summaries carry the same
 fields. At depth > 1, direction is relative to `via`, the preceding node.
 
+### Audit links are hidden by default (10.39.1)
+
+`contradiction-cleared` links are Nyx bookkeeping: they say a pair was judged
+and found compatible. They are not returned in `links` or in linked summaries
+unless `include_audit_links=true` is passed. Internal consumers (consolidation,
+oversized remediation) always see them.
+
 ## Namespace boundaries
 
 SQLite ID operations now enforce the store's namespace, including direct

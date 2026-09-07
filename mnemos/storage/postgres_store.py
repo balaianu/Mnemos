@@ -42,7 +42,7 @@ class PostgresStore(MnemosStore):
     def get_memories_by_ids(self, ids): raise NotImplementedError()
     def count_active(self, namespace=None): raise NotImplementedError()
     def store_link(self, source_id, target_id, relation_type, strength=0.5): raise NotImplementedError()
-    def get_links(self, memory_ids): raise NotImplementedError()
+    def get_links(self, memory_ids, include_audit=False): raise NotImplementedError()
     def store_nyx_insight(self, memory_id, source_ids, insight_type, consolidation_type="aggregation"): raise NotImplementedError()
     def get_merged_sources(self, memory_id): raise NotImplementedError()
     def stats(self, namespace=None): raise NotImplementedError()

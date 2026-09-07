@@ -64,6 +64,7 @@ def cmd_search(mnemos, args):
         expand_merged=args.expand_merged,
         snippet_chars=getattr(args, "snippet_chars", None),
         include_linked=getattr(args, "include_linked", False),
+        include_audit_links=getattr(args, "audit_links", False),
     )
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False))
@@ -338,6 +339,8 @@ def main(argv=None):
                    help="Tier-2 recall: enrich consolidated memories with their source originals")
     p.add_argument("--snippet-chars", type=int, default=None,
                    help="Replace result content with a query-matched window of ~N chars")
+    p.add_argument("--audit-links", action="store_true",
+                   help="Also show Nyx audit links (contradiction-cleared)")
     p.add_argument("--include-linked", action="store_true",
                    help="Fold first-hop linked memories into each result as summaries")
     p.add_argument("--json", action="store_true")

@@ -4,6 +4,21 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [10.39.1] - 2026-09-07 (compact links)
+
+### Changed
+- Search results and linked summaries no longer include Nyx audit links
+  (`contradiction-cleared`) by default. Those rows record that a pair was
+  judged compatible, not that the memories relate, and on a mature store they
+  outnumber every semantic relation combined (5180 of roughly 6360 link rows on
+  the reference deployment, p90 of 24 links per memory). With them gone the
+  p90 is 3. Each link also grew by three fields in 10.39.0, which made the
+  noise more expensive. Opt back in with `memory_search(include_audit_links=true)`,
+  `mnemos search --audit-links`, or `store.get_links(ids, include_audit=True)`.
+  Consolidation and oversized-memory remediation still see every link; the
+  filter is on the output surface only. The set lives in
+  `constants.AUDIT_LINK_RELATIONS`.
+
 ## [10.39.0] - 2026-09-06
 
 ### Fixed

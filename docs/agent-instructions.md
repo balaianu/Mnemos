@@ -65,6 +65,8 @@ them proactively.
   `direction` before interpreting an incoming `superseded_by` relationship
 - Use `valid_only=true` when current validity matters; linked content follows
   the same validity filter
+- `links` omit Nyx audit rows (`contradiction-cleared`) by default; pass
+  `include_audit_links=true` only when tracing what consolidation judged
 
 ### What NOT to store
 - Third-party claims as fact (attribute them: "user X said Y")
@@ -132,6 +134,8 @@ them proactively.
   `direction` before interpreting an incoming `superseded_by` relationship
 - Use `valid_only=true` when current validity matters; linked content follows
   the same validity filter
+- `links` omit Nyx audit rows (`contradiction-cleared`) by default; pass
+  `include_audit_links=true` only when tracing what consolidation judged
 
 ### What NOT to store
 - Third-party claims as fact (attribute them: "user X said Y")

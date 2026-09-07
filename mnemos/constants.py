@@ -37,6 +37,12 @@ ACCESS_CAP = 20
 CONFIRM_BOOST_30D = 0.3
 CONFIRM_BOOST_90D = 0.15
 
+# --- Link output ---
+# Nyx bookkeeping relations: they record that a pair was judged, not that
+# the memories relate. On a mature store they outnumber semantic links
+# roughly 4:1, so search output drops them unless the caller opts in.
+AUDIT_LINK_RELATIONS = frozenset({"contradiction-cleared"})
+
 # --- Contradiction detection ---
 # Tiered classification (v10.3.0, 2026-04-16). The previous single-threshold
 # design conflated "same topic" (what the cross-encoder scores) with "actually

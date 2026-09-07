@@ -452,7 +452,7 @@ class Mnemos:
                         self.store.store_link(a, b, "related", strength=0.6)
                     # Re-point the original's links onto the first child so the
                     # graph stays connected after the parent is archived.
-                    for l in self.store.get_links([oid]).get(oid, []):
+                    for l in self.store.get_links([oid], include_audit=True).get(oid, []):
                         other = l.get("linked_id")
                         if other and other != oid and other not in child_ids:
                             source, target = child_ids[0], other
@@ -885,7 +885,8 @@ class Mnemos:
                type_filter=None, status="active", valid_only=False,
                search_mode=None, limit=20, auto_widen=True,
                expand_merged=False, snippet_chars=None,
-               include_linked=False, linked_depth=1) -> dict:
+               include_linked=False, linked_depth=1,
+               include_audit_links=False) -> dict:
         # Clamp linked_depth at entry: negative values would make the
         # BFS guard `if dist >= linked_depth` trivially true after the
         # root, silently disabling all link expansion. The MCP tool
@@ -987,7 +988,7 @@ class Mnemos:
         # Attach links
         link_map = {}
         if merged_ids:
-            link_map = self.store.get_links(merged_ids)
+            link_map = self.store.get_links(merged_ids, include_audit=include_audit_links)
             for r in results:
                 if r["id"] in link_map:
                     r["links"] = link_map[r["id"]]
@@ -1051,7 +1052,8 @@ class Mnemos:
                     # fetched their links yet - fetch lazily on first visit
                     if node_id not in local_link_cache:
                         try:
-                            newlinks = self.store.get_links([node_id])
+                            newlinks = self.store.get_links(
+                                [node_id], include_audit=include_audit_links)
                             local_link_cache.update(newlinks)
                         except Exception:
                             local_link_cache[node_id] = []

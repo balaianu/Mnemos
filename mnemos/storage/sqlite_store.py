@@ -25,7 +25,7 @@ from typing import Optional
 from .base import MnemosStore, Memory, SearchResult
 from ..constants import (
     DEFAULT_DB_PATH, DEFAULT_NAMESPACE, FASTEMBED_DIMS, FASTEMBED_MODEL,
-    BM25_WEIGHTS, RANKING_ORDER_SQL, BM25_CALL,
+    BM25_WEIGHTS, RANKING_ORDER_SQL, BM25_CALL, AUDIT_LINK_RELATIONS,
 )
 
 
@@ -1102,21 +1102,27 @@ class SQLiteStore(MnemosStore):
         )
         conn.commit()
 
-    def get_links(self, memory_ids):
+    def get_links(self, memory_ids, include_audit=False):
         if not memory_ids:
             return {}
         conn = self._get_conn()
         ph = ",".join("?" for _ in memory_ids)
         id_list = list(memory_ids)
+        params = id_list + id_list + [self.namespace, self.namespace]
+        audit_clause = ""
+        if not include_audit:
+            audit_ph = ",".join("?" for _ in AUDIT_LINK_RELATIONS)
+            audit_clause = f" AND l.relation_type NOT IN ({audit_ph})"
+            params += sorted(AUDIT_LINK_RELATIONS)
         rows = conn.execute(
             f"""SELECT l.source_id, l.target_id, l.relation_type, l.strength
                 FROM memory_links l
                 JOIN memories src ON src.id = l.source_id
                 JOIN memories tgt ON tgt.id = l.target_id
                 WHERE (source_id IN ({ph}) OR target_id IN ({ph}))
-                  AND src.namespace = ? AND tgt.namespace = ?
+                  AND src.namespace = ? AND tgt.namespace = ?{audit_clause}
                 ORDER BY strength DESC""",
-            id_list + id_list + [self.namespace, self.namespace],
+            params,
         ).fetchall()
         link_map = {}
         id_set = set(memory_ids)

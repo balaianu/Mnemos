@@ -58,13 +58,15 @@ them proactively.
 ### When to update
 - If you find a memory is wrong or outdated, call `memory_update` with
   the corrected fields rather than storing a new conflicting memory
-- After verifying a memory against a source or explicit user confirmation,
-  call `memory_update(id=..., confirmed=true)` to record that verification
+- Correcting a memory's content, or setting `verified=true`, records
+  `last_confirmed`; `confirmed=true` alone does the same without changing
+  anything, `confirmed=false` suppresses it for mechanical edits
 - Reading a memory only updates access telemetry, never confirmation
 - Read directional links as `source_id --relation--> target_id`; check
   `direction` before interpreting an incoming `superseded_by` relationship
-- Use `valid_only=true` when current validity matters; linked content follows
-  the same validity filter
+- Search returns currently valid memories by default, linked content
+  included; pass `valid_only=false` when you need history (expired or
+  not-yet-valid facts)
 - `links` omit Nyx audit rows (`contradiction-cleared`) by default; pass
   `include_audit_links=true` only when tracing what consolidation judged
 
@@ -127,13 +129,15 @@ them proactively.
 ### When to update
 - If you find a memory is wrong or outdated, call `memory_update` with
   the corrected fields rather than storing a new conflicting memory
-- After verifying a memory against a source or explicit user confirmation,
-  call `memory_update(id=..., confirmed=true)` to record that verification
+- Correcting a memory's content, or setting `verified=true`, records
+  `last_confirmed`; `confirmed=true` alone does the same without changing
+  anything, `confirmed=false` suppresses it for mechanical edits
 - Reading a memory only updates access telemetry, never confirmation
 - Read directional links as `source_id --relation--> target_id`; check
   `direction` before interpreting an incoming `superseded_by` relationship
-- Use `valid_only=true` when current validity matters; linked content follows
-  the same validity filter
+- Search returns currently valid memories by default, linked content
+  included; pass `valid_only=false` when you need history (expired or
+  not-yet-valid facts)
 - `links` omit Nyx audit rows (`contradiction-cleared`) by default; pass
   `include_audit_links=true` only when tracing what consolidation judged
 

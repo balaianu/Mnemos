@@ -4,7 +4,38 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
-## [10.39.2] - 2026-09-07 (review follow-ups)
+## [10.40.0] - 2026-09-07 (current by default, confirmation has producers)
+
+Minor bump: two defaults change and clients that relied on them will see
+different results.
+
+### Changed
+- **`valid_only` defaults to True everywhere.** `memory_search`, `mnemos
+  search`, `Mnemos.search`, and the store-level `search_fts`, `search_vec`
+  and `search_vec_archived` now return currently valid memories unless told
+  otherwise. The 10.39.0 finding said historical retrieval should be the
+  explicit option and then left the default alone; on the reference store
+  every one of the 40 active memories carrying a `valid_until` was already
+  past it and all of them surfaced in every default search. Dedup and
+  contradiction candidate searches inherit the store default: a fact whose
+  validity ended is neither a duplicate of nor a contradiction to a fresh
+  statement of the current one. Pass `valid_only=false` for history. The CLI
+  flag `--valid-only` is replaced by `--include-expired`. Reads by ID are
+  unaffected. The two vector indexes had opposite defaults before; they
+  agree now.
+- **A content correction or `verified=true` through `update` records
+  `last_confirmed`.** 10.39.0 made the column honest (reads no longer touch
+  it) and left it with no writer, so the confirmation boost in ranking was
+  draining to zero with nothing to refill it. A caller that rewrote the
+  content, or flagged it verified, looked at it; that is the confirmation
+  event. `confirmed=false` suppresses it for mechanical edits and
+  `bulk_rewrite` passes it. `confirmed=true` alone still confirms without
+  changing anything.
+
+### Added
+- `verified` is settable through `memory_update` and `mnemos update
+  --verified`; it was store-time only before.
+
 
 ### Fixed
 - `store_link` returns False instead of raising when an endpoint is missing

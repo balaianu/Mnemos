@@ -119,7 +119,7 @@ class MnemosStore(ABC):
         layer: Optional[str] = None,
         type_filter: Optional[str] = None,
         status: str = "active",
-        valid_only: bool = False,
+        valid_only: bool = True,
         limit: int = 50,
         and_mode: bool = True,
     ) -> list:
@@ -135,7 +135,7 @@ class MnemosStore(ABC):
         layer: Optional[str] = None,
         type_filter: Optional[str] = None,
         status: str = "active",
-        valid_only: bool = False,
+        valid_only: bool = True,
         limit: int = 50,
     ) -> list:
         """Vector similarity search. Returns list of (memory_id, distance) tuples."""

@@ -882,7 +882,7 @@ class Mnemos:
             raise
 
     def _search_impl(self, query, project=None, subcategory=None, layer=None,
-               type_filter=None, status="active", valid_only=False,
+               type_filter=None, status="active", valid_only=True,
                search_mode=None, limit=20, auto_widen=True,
                expand_merged=False, snippet_chars=None,
                include_linked=False, linked_depth=1,
@@ -1218,9 +1218,13 @@ class Mnemos:
         return memory.to_dict()
 
     def update(self, mid: int, **fields) -> dict:
-        # Reading is access, not evidence that a fact remains true. The
-        # caller explicitly confirms after checking the fact with a source.
-        if fields.pop("confirmed", False):
+        # Reading is access, not evidence that a fact remains true. A content
+        # correction or a verified flag from the caller is: they looked at it.
+        # Mechanical edits pass confirmed=False.
+        confirmed = fields.pop("confirmed", None)
+        if confirmed is None:
+            confirmed = "content" in fields or bool(fields.get("verified"))
+        if confirmed:
             fields["last_confirmed"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         if not fields:
             return {"error": "no fields to update"}
@@ -1463,7 +1467,8 @@ class Mnemos:
         affected = 0
         if not dry_run:
             for change in changes:
-                ok = self.update(change["id"], content=change["_new_content"])
+                ok = self.update(change["id"], content=change["_new_content"],
+                                 confirmed=False)
                 if isinstance(ok, dict) and ok.get("status") == "updated":
                     affected += 1
 

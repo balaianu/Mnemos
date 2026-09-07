@@ -892,7 +892,7 @@ class SQLiteStore(MnemosStore):
     # --- Search ---
 
     def search_fts(self, query, namespace=None, project=None, subcategory=None,
-                   layer=None, type_filter=None, status="active", valid_only=False,
+                   layer=None, type_filter=None, status="active", valid_only=True,
                    limit=50, and_mode=True):
         from ..query import clean_fts_query
         conn = self._get_conn()
@@ -940,7 +940,7 @@ class SQLiteStore(MnemosStore):
         return []
 
     def search_vec(self, embedding, namespace=None, project=None, subcategory=None,
-                   layer=None, type_filter=None, status="active", valid_only=False,
+                   layer=None, type_filter=None, status="active", valid_only=True,
                    limit=50):
         return self._search_vec_filtered(
             embedding, namespace=namespace, project=project,
@@ -950,7 +950,7 @@ class SQLiteStore(MnemosStore):
 
     def _search_vec_filtered(self, embedding, namespace=None, project=None,
                              subcategory=None, layer=None, type_filter=None,
-                             status="active", valid_only=False, limit=50,
+                             status="active", valid_only=True, limit=50,
                              archived=False):
         """Select eligible vector IDs before KNN, in both active and archived indexes.
 

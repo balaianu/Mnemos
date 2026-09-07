@@ -149,7 +149,7 @@ class QdrantStore(MnemosStore):
         return self._sqlite.search_fts(*args, **kwargs)
 
     def search_vec(self, embedding, namespace=None, project=None, subcategory=None,
-                   layer=None, type_filter=None, status="active", valid_only=False,
+                   layer=None, type_filter=None, status="active", valid_only=True,
                    limit=50):
         ns = namespace or self.namespace
         # Build Qdrant filter

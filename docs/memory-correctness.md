@@ -59,23 +59,36 @@ merged originals this reduces depth 2 and 3 reach. `valid_only=False` still allo
 metadata may reference expired records; it is a record of the relationship,
 not an assertion that those records are current.
 
+### Current validity is the default (10.40.0)
+
+`valid_only` defaults to `True` at every surface: `memory_search`, `mnemos
+search`, `Mnemos.search`, and the store-level `search_fts`, `search_vec` and
+`search_vec_archived`. Dedup and contradiction candidate searches inherit the
+store default, so a memory whose validity has ended (for example after a
+Phase 4 `EVOLVED` verdict set its `valid_until`) is neither a duplicate of nor
+a contradiction to a fresh statement of the current fact. Pass
+`valid_only=False` (`--include-expired` on the CLI) for history. Direct reads
+by ID are unaffected.
+
 ## Access and confirmation
 
 `memory_get` still increments `access_count`, updates `last_accessed`, and
 applies the existing importance thresholds. It no longer updates
 `last_confirmed`: looking up a claim is not evidence that it remains true.
 
-After independently checking a source or receiving explicit confirmation:
+Since 10.40.0 confirmation has producers. A content change through `update`
+records `last_confirmed`, because the caller looked at the memory and fixed
+it. So does `verified=true`, which is now settable through `memory_update` and
+`mnemos update --verified`. Mechanical rewrites pass `confirmed=false`
+(`bulk_rewrite` does). To confirm without changing anything:
 
 ```text
 memory_update(id=123, confirmed=true)
 mnemos update 123 --confirm
 ```
 
-Python callers use `m.update(123, confirmed=True)`. The server records the
-current local timestamp. Confirmation can accompany a content correction;
-it does not change the separate `verified` flag. Do not automatically confirm
-every result or every read. Existing `last_confirmed` values are left alone
+Python callers use `m.update(123, confirmed=True)`. Do not automatically
+confirm every result or every read. Existing `last_confirmed` values are left alone
 because this release cannot reconstruct which old values came from evidence
 versus access.
 

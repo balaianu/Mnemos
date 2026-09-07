@@ -49,7 +49,7 @@ Could a stronger reranker like Jina Reranker v3 push the numbers higher? Possibl
   - Episodic memories: ~46 days (events, conversations)
   - Semantic memories: ~180 days (distilled knowledge)
 - **Validity windows**: facts can have `valid_from` / `valid_until` for time-bound truths
-- **`valid_only` filter**: exclude expired facts at query time
+- **`valid_only` filter**: current facts only by default (since 10.40.0); `valid_only=false` returns history
 
 ## Hierarchical organization
 

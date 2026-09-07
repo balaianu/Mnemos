@@ -58,7 +58,7 @@ def cmd_search(mnemos, args):
         subcategory=args.subcategory,
         type_filter=args.type,
         layer=args.layer,
-        valid_only=args.valid_only,
+        valid_only=not getattr(args, "include_expired", False),
         search_mode=args.mode,
         limit=args.limit,
         expand_merged=args.expand_merged,
@@ -86,6 +86,8 @@ def cmd_update(mnemos, args):
     fields = {}
     if getattr(args, "confirm", False):
         fields["confirmed"] = True
+    if getattr(args, "verified", False):
+        fields["verified"] = True
     for k in ("content", "project", "tags", "importance", "status", "type",
               "layer", "subcategory", "valid_from", "valid_until"):
         v = getattr(args, k, None)
@@ -332,7 +334,8 @@ def main(argv=None):
     p.add_argument("--subcategory", "--sub")
     p.add_argument("--type", choices=sorted(VALID_TYPES))
     p.add_argument("--layer", choices=sorted(VALID_LAYERS))
-    p.add_argument("--valid-only", action="store_true")
+    p.add_argument("--include-expired", action="store_true",
+                   help="Also return expired and not-yet-valid memories (history)")
     p.add_argument("--mode", choices=["fts", "vec", "hybrid"])
     p.add_argument("--limit", "-l", type=int, default=20)
     p.add_argument("--expand-merged", action="store_true",
@@ -354,6 +357,8 @@ def main(argv=None):
     # update
     p = sub.add_parser("update", help="Update a memory")
     p.add_argument("id", type=int)
+    p.add_argument("--verified", action="store_true",
+                   help="Mark verified against a source or by the user; also confirms")
     p.add_argument("--confirm", action="store_true",
                    help="Record explicit verification now, not merely a read")
     p.add_argument("--content")

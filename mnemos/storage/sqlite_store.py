@@ -18,6 +18,7 @@ Recommended for personal/small-team deployments up to ~10K memories on SSD,
 
 import os
 import sqlite3
+from datetime import datetime
 import struct
 import sys
 from typing import Optional
@@ -820,9 +821,9 @@ class SQLiteStore(MnemosStore):
 
     def delete_memory(self, mid: int, hard: bool = False) -> bool:
         conn = self._get_conn()
-        if self.get_memory(mid, increment_access=False) is None:
-            return False
         if hard:
+            if not conn.in_transaction:
+                conn.execute("BEGIN IMMEDIATE")
             join_col = self._get_vec_join_col()
             # Remove embedding first
             existing = conn.execute(
@@ -861,13 +862,23 @@ class SQLiteStore(MnemosStore):
                 "DELETE FROM memory_links WHERE source_id = ? OR target_id = ?",
                 (mid, mid),
             )
-            conn.execute("DELETE FROM memories WHERE id = ?", (mid,))
+            cur = conn.execute(
+                "DELETE FROM memories WHERE id = ? AND namespace = ?",
+                (mid, self.namespace),
+            )
+            if cur.rowcount == 0:
+                conn.rollback()
+                return False
             conn.commit()
         else:
-            conn.execute(
-                "UPDATE memories SET status = 'archived', updated_at = datetime('now', 'localtime') WHERE id = ?",
-                (mid,),
+            cur = conn.execute(
+                "UPDATE memories SET status = 'archived', updated_at = datetime('now', 'localtime') "
+                "WHERE id = ? AND namespace = ?",
+                (mid, self.namespace),
             )
+            if cur.rowcount == 0:
+                conn.rollback()
+                return False
             conn.commit()
             # Move the vector into the tier-2 index so the archived memory
             # stays reachable by expand_merged. Never blocks the archive
@@ -964,10 +975,12 @@ class SQLiteStore(MnemosStore):
             clauses.append("m.status = ?")
             params.append(status)
         if valid_only:
+            today = datetime.now().date().isoformat()
             clauses.extend([
-                "(m.valid_until IS NULL OR m.valid_until > date('now', 'localtime'))",
-                "(m.valid_from IS NULL OR m.valid_from <= date('now', 'localtime'))",
+                "(m.valid_until IS NULL OR m.valid_until > ?)",
+                "(m.valid_from IS NULL OR m.valid_from <= ?)",
             ])
+            params += [today, today]
         rows = conn.execute(
             f"""SELECT em.source_id, ev.distance
                 FROM {vec_table} ev
@@ -1090,17 +1103,18 @@ class SQLiteStore(MnemosStore):
 
     # --- Links ---
 
-    def store_link(self, source_id, target_id, relation_type, strength=0.5):
+    def store_link(self, source_id, target_id, relation_type, strength=0.5) -> bool:
         conn = self._get_conn()
         endpoints = self.get_memories_by_ids([source_id, target_id])
         if any(mid not in endpoints for mid in (source_id, target_id)):
-            raise ValueError("Link endpoints must exist in the store namespace")
+            return False
         conn.execute(
             "INSERT OR IGNORE INTO memory_links (source_id, target_id, relation_type, strength) "
             "VALUES (?, ?, ?, ?)",
             (source_id, target_id, relation_type, strength),
         )
         conn.commit()
+        return True
 
     def get_links(self, memory_ids, include_audit=False):
         if not memory_ids:
@@ -1119,9 +1133,9 @@ class SQLiteStore(MnemosStore):
                 FROM memory_links l
                 JOIN memories src ON src.id = l.source_id
                 JOIN memories tgt ON tgt.id = l.target_id
-                WHERE (source_id IN ({ph}) OR target_id IN ({ph}))
+                WHERE (l.source_id IN ({ph}) OR l.target_id IN ({ph}))
                   AND src.namespace = ? AND tgt.namespace = ?{audit_clause}
-                ORDER BY strength DESC""",
+                ORDER BY l.strength DESC""",
             params,
         ).fetchall()
         link_map = {}
@@ -1159,11 +1173,11 @@ class SQLiteStore(MnemosStore):
         consolidation pipeline marked as no longer current.
         """
         conn = self._get_conn()
-        if self.get_memory(memory_id, increment_access=False) is None:
-            return []
         row = conn.execute(
-            "SELECT source_ids, consolidation_type FROM nyx_insights WHERE memory_id = ?",
-            (memory_id,),
+            "SELECT ni.source_ids, ni.consolidation_type FROM nyx_insights ni "
+            "JOIN memories m ON m.id = ni.memory_id "
+            "WHERE ni.memory_id = ? AND m.namespace = ?",
+            (memory_id, self.namespace),
         ).fetchone()
         if not row:
             return []
@@ -1903,7 +1917,10 @@ class SQLiteStore(MnemosStore):
         for mid in mismatched_ids:
             r = conn.execute(
                 "SELECT project, content, tags, type, layer "
-                "FROM memories WHERE id = ?", (mid,)).fetchone()
+                "FROM memories WHERE id = ? AND namespace = ?",
+                (mid, namespace)).fetchone()
+            if r is None:
+                continue
             text = prep_memory_text(
                 r["project"], r["content"] or "", r["tags"] or "",
                 mem_type=r["type"] or "", layer=r["layer"] or "")

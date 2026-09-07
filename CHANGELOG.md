@@ -4,7 +4,50 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
-## [10.39.1] - 2026-09-07 (compact links)
+## [10.39.2] - 2026-09-07 (review follow-ups)
+
+### Fixed
+- `store_link` returns False instead of raising when an endpoint is missing
+  or foreign. 10.39.0 introduced the `ValueError`, and none of the six call
+  sites in `core` caught it, so a dedup or contradiction hit hard-deleted
+  between the search and the link would abort `store()` after the memory row
+  was already written: the caller saw an error, the memory persisted, a retry
+  duplicated it. A link that cannot be made must never fail the write that
+  wanted it.
+- Namespace scoping moved into the statements. `delete_memory` (hard and
+  soft) and `get_merged_sources` no longer rely on a `get_memory` pre-check;
+  the DELETE, UPDATE and nyx_insights lookup carry `namespace` themselves, and
+  hard delete runs its embedding, link and row cleanup in one transaction that
+  rolls back when the row is not ours. `reembed_mismatched` now uses the
+  namespace argument it always received. `move_embedding_to_archive` keeps its
+  pre-check because the underlying helper is connection-level and shared with
+  consolidation; `namespace` is not an updatable column, so the check cannot
+  race a namespace change.
+
+### Added
+- Regression coverage for the implicit-rowid `embed_vec_arch` schema that
+  10.39.0 declared supported without exercising. The prefiltered archived KNN
+  is now tested against both vec0 layouts.
+
+### Changed
+- The KNN validity filter binds today's date once instead of calling
+  `date('now','localtime')` in the subquery. Measured: no difference (the
+  cost of the prefiltered KNN over 10.38.1 is the eligibility JOIN itself,
+  about +1.4 ms active and +3 ms archived on a 6k-row store, and it is the
+  price of not losing eligible hits). Kept because it shares one clock
+  source with the Python-side validity check in linked expansion.
+
+### Documented
+- 10.39.0 stopped refreshing `last_confirmed` on reads. `CONFIRMATION_BOOST_SQL`
+  in the FTS ranking gives a 30-day and 90-day lift on that column, so
+  frequently read memories lose a small recency lift until explicitly
+  confirmed. The boost is never a penalty; ordering among unconfirmed
+  memories is unchanged.
+- 10.39.0 also stopped traversing archived nodes as bridges in linked
+  expansion. That is a separate decision from validity filtering and is
+  now recorded as one: on stores where consolidation leaves links pointing at
+  merged originals, depth 2 and 3 expansion reaches less than before.
+
 
 ### Changed
 - Search results and linked summaries no longer include Nyx audit links

@@ -25,6 +25,13 @@ and found compatible. They are not returned in `links` or in linked summaries
 unless `include_audit_links=true` is passed. Internal consumers (consolidation,
 oversized remediation) always see them.
 
+## Link creation never aborts a write
+
+`store_link` returns `False` when an endpoint is missing or belongs to another
+namespace. It does not raise. `store()` links a new memory to dedup and
+contradiction hits after the row is written; a link that cannot be made is
+dropped and the store still succeeds.
+
 ## Namespace boundaries
 
 SQLite ID operations now enforce the store's namespace, including direct
@@ -46,8 +53,9 @@ Both implicit-rowid and explicit-id vec0 schemas remain supported.
 
 `valid_only=True` excludes content before `valid_from` and at or after
 `valid_until`, using the server's local date, as before. Linked content now
-obeys the same rule, and invalid/archived nodes cannot bridge a multi-hop
-traversal. `valid_only=False` still allows historical active content. Raw link
+obeys the same rule. Separately, archived nodes no longer act as bridges in a
+multi-hop traversal; on stores where consolidation leaves links pointing at
+merged originals this reduces depth 2 and 3 reach. `valid_only=False` still allows historical active content. Raw link
 metadata may reference expired records; it is a record of the relationship,
 not an assertion that those records are current.
 
@@ -70,6 +78,11 @@ it does not change the separate `verified` flag. Do not automatically confirm
 every result or every read. Existing `last_confirmed` values are left alone
 because this release cannot reconstruct which old values came from evidence
 versus access.
+
+Ranking consequence: the FTS ranking applies a confirmation boost for 30 and
+90 days after `last_confirmed`. Reads used to refresh it, so frequently read
+memories carried the boost; now only explicit confirmation does. It is a boost
+only, never a penalty.
 
 ## Embedding consistency
 

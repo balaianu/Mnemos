@@ -155,8 +155,10 @@ class MnemosStore(ABC):
     # --- Links (relationships between memories) ---
 
     @abstractmethod
-    def store_link(self, source_id: int, target_id: int, relation_type: str, strength: float = 0.5) -> None:
-        """Store a relationship between two memories."""
+    def store_link(self, source_id: int, target_id: int, relation_type: str, strength: float = 0.5) -> bool:
+        """Store a relationship between two memories. Returns False, without
+        raising, when either endpoint is missing from the store namespace:
+        a link that cannot be made must never abort the write that wanted it."""
 
     @abstractmethod
     def get_links(self, memory_ids: list, include_audit: bool = False) -> dict:

@@ -81,8 +81,7 @@ def test_foreign_delete_has_no_side_effects(stores, hard):
 def test_cross_namespace_links_and_lineage_are_not_exposed(stores):
     alice, bob = stores
     own, foreign = put(alice), put(bob)
-    with pytest.raises(ValueError, match="namespace"):
-        alice.store_link(own, foreign, "relates")
+    assert alice.store_link(own, foreign, "relates") is False
     # Existing bad links/lineage must also be contained on read.
     conn = alice.raw_connection()
     conn.execute("INSERT INTO memory_links (source_id, target_id, relation_type, strength) VALUES (?, ?, ?, ?)",

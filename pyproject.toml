@@ -15,7 +15,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [
-    {name = "draca-glitch"}
+    {name = "Mikael Wedlund"}
 ]
 keywords = ["memory", "ai", "agent", "mcp", "rag", "retrieval", "embeddings", "claude"]
 classifiers = [

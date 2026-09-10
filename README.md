@@ -9,6 +9,8 @@
 > A persistent memory system for AI agents.
 > Named after Mnemosyne (Greek: μνήμη, *memory*).
 
+**Author:** [Mikael Wedlund](https://eastblue.se/mikael-wedlund) (`draca-glitch`)
+
 **Runs on any computer. Works with any AI.**
 
 A local, CPU-only memory store for Claude Code, Cursor, ChatGPT Desktop, Gemini, or any MCP-compatible AI client. Hybrid retrieval (BM25 + vectors + cross-encoder rerank), no LLM in the search path, four hot-path MCP tools (plus two maintenance tools), one SQLite file by default.

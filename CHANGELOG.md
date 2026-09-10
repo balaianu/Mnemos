@@ -4,6 +4,11 @@ All notable changes to Mnemos. Dates are from the original private development
 repository, where the system existed under an internal name (`agent-memory`)
 before being open-sourced as Mnemos in this repo.
 
+## [Unreleased]
+
+### Changed
+- Public author identity is Mikael Wedlund (`CITATION.cff`, `pyproject.toml` authors, README). The GitHub account remains `draca-glitch`.
+
 ## [10.40.1] - 2026-09-07 (validity can be cleared)
 
 ### Fixed

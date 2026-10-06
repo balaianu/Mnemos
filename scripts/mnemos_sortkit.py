@@ -20,7 +20,7 @@ Subcommands:
                        Without --commit it only reports what it would do.
 
 Usage:
-  MNEMOS_DB=/root/work/memory.db MNEMOS_NAMESPACE=<your-namespace> \\
+  MNEMOS_DB=/root/work/db/memory.db MNEMOS_NAMESPACE=<your-namespace> \\
     /root/venvs/ai/bin/python scripts/mnemos_sortkit.py <cmd> ...
 """
 import json

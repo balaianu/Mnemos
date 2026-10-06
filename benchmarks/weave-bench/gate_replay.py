@@ -12,7 +12,7 @@ convention, rustdesk version, torch policy, nyx-cloud decision, prod install
 fix); the Sonnet merge + splitter recovered atomicity downstream, but the
 cluster itself was noise and the gate should show that upstream.
 
-Usage: /root/venvs/ai/bin/python gate_replay.py [--db /root/work/memory.db]
+Usage: /root/venvs/ai/bin/python gate_replay.py [--db /root/work/db/memory.db]
 Deps: mnemos[nli] with a local ONNX export (venv ai).
 """
 
@@ -48,7 +48,7 @@ def max_line_duplicate(a_text, b_text):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--db", default="/root/work/memory.db")
+    ap.add_argument("--db", default="/root/work/db/memory.db")
     args = ap.parse_args()
     conn = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
 

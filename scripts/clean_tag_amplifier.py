@@ -21,8 +21,8 @@ Diagnose first (plain sqlite3, any machine):
     WHERE status='active' AND length(tags) > 1000;
 
 Usage:
-    python scripts/clean_tag_amplifier.py --db ~/work/memory.db          # dry run
-    python scripts/clean_tag_amplifier.py --db ~/work/memory.db --apply
+    python scripts/clean_tag_amplifier.py --db ~/work/db/memory.db          # dry run
+    python scripts/clean_tag_amplifier.py --db ~/work/db/memory.db --apply
 
 --apply writes a timestamped .bak sibling of the DB first. Tags are part of
 the embedded text, so RE-EMBED after applying: `mnemos reembed`, or your

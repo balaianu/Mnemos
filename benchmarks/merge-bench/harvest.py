@@ -165,7 +165,7 @@ def harvest_clusters(conn):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--db", default="/root/work/memory.db")
+    ap.add_argument("--db", default="/root/work/db/memory.db")
     ap.add_argument("--out", default="arms.json")
     args = ap.parse_args()
     conn = open_ro(args.db)

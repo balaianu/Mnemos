@@ -11,7 +11,7 @@ Sources:
 Output: pairs.jsonl with one candidate pair per line. Labels are assigned
 separately (labels.json) by a human-grade reader, not by this script.
 
-Usage: /root/venvs/ai/bin/python harvest.py [--db /root/work/memory.db]
+Usage: /root/venvs/ai/bin/python harvest.py [--db /root/work/db/memory.db]
 Deps: numpy (via fastembed), sqlite3 stdlib. DB opened mode=ro.
 """
 
@@ -38,7 +38,7 @@ def row_content(conn, mid):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--db", default="/root/work/memory.db")
+    ap.add_argument("--db", default="/root/work/db/memory.db")
     ap.add_argument("--out", default="pairs.jsonl")
     args = ap.parse_args()
 

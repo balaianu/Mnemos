@@ -18,7 +18,7 @@ Sources:
 Output: pairs.jsonl, one pair per line with contents, created_at, silver
 label and silver strength.
 
-Usage: /root/venvs/ai/bin/python harvest.py [--db /root/work/memory.db]
+Usage: /root/venvs/ai/bin/python harvest.py [--db /root/work/db/memory.db]
 Deps: numpy, sqlite_vec (venv ai). DB opened mode=ro.
 """
 
@@ -152,7 +152,7 @@ def harvest_negatives(conn, exclude_pairs):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--db", default="/root/work/memory.db")
+    ap.add_argument("--db", default="/root/work/db/memory.db")
     ap.add_argument("--out", default="pairs.jsonl")
     args = ap.parse_args()
 

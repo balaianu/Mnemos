@@ -6,6 +6,59 @@ before being open-sourced as Mnemos in this repo.
 
 ## [Unreleased]
 
+## [10.41.0] - 2026-10-06 (move a store safely)
+
+This update is for when you want to move your database somewhere else, since
+the main work directory is not the most optimal place for it.
+
+### Added
+- **`mnemos move DEST` relocates the store without losing writes.** Moving a
+  live SQLite file with `mv` fails three ways: a process that still has the
+  old file open keeps writing to it after the rename, a raw copy of a WAL-mode
+  file omits rows still in the `-wal`, and a config that still names the old
+  path makes SQLite create a fresh empty database there. `mnemos move` refuses
+  with exit code 1 while it can see another process on the store (stop the MCP
+  or HTTP server, then retry), copies through the backup API under SQLite's
+  exclusive lock, runs `quick_check` and compares the row count of every table
+  against the source, gives the copy the source's owner and permissions, and
+  keeps the old file as `<name>.moved-<timestamp>` for rollback. The old path
+  is then replaced by a symlink in one atomic rename, so a stale `MNEMOS_DB`
+  still reaches the real store and the path is never free for SQLite to
+  create an empty database on (`--no-link` skips the symlink). `DEST` is a
+  file path, an existing directory, or a path ending in `/` (a directory,
+  created if missing). While the symlink is in place a second run against the
+  same destination is a no-op. On a failure the source is unchanged, no file
+  is left at the destination and directories the run created are removed.
+  `--json` prints the result.
+- Two in-use checks. On Linux `/proc` is scanned for any process that has the
+  file open, which catches idle connections in every journal mode; a default
+  Mnemos store is a rollback-journal database, where an idle connection holds
+  no file lock. Then SQLite's exclusive lock, on every platform, which sees
+  every connection that has read or written a WAL database and every active
+  transaction on a rollback-journal one. The refusal names the process ids
+  when it has them.
+- A last line of defence for the process neither check can see (another
+  user's process when not root, an idle one where `/proc` is missing, an
+  `open()` that lands between the scan and the lock): the kept file is left in
+  rollback-journal mode. SQLite refuses to write a rollback-journal database
+  whose file was renamed under an open handle, so such a process gets an
+  error on its next write instead of committing into the abandoned file. WAL
+  has no such guard, which is why the kept file is switched out of it; the
+  destination keeps the source's journal mode. If you roll back by renaming
+  the kept file into place, switch it back with `PRAGMA journal_mode=WAL`.
+- `--db PATH` picks the file to move (default `MNEMOS_DB`). The mover is
+  schema-agnostic: it loads no extension and never opens the file as a Mnemos
+  store, so it also relocates other SQLite databases that sit next to the
+  memory store. Library entry point: `mnemos.storage.move.move_database()`.
+- Known limits. An unseen process can still read the kept file and serve
+  stale data until it is restarted. Without the privilege to change
+  ownership the copy belongs to whoever ran the move. ACLs and extended
+  attributes are not copied. If the symlink cannot be created the move still
+  completes and says so; the old path is then free. On Windows there is no
+  symlink swap and a short unlocked window around the rename.
+- Tests: `tests/test_v1041_move.py` (25, including the lost-write race found
+  in review, run against a second process).
+
 ### Changed
 - Public author identity is Mikael Wedlund (`CITATION.cff`, `pyproject.toml` authors, README). The GitHub account remains `draca-glitch`.
 

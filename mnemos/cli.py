@@ -16,7 +16,7 @@ import os
 import sys
 
 from .core import Mnemos
-from .constants import VALID_TYPES, VALID_LAYERS, DEFAULT_NAMESPACE
+from .constants import VALID_TYPES, VALID_LAYERS, DEFAULT_NAMESPACE, DEFAULT_DB_PATH
 
 
 def _ensure_utf8_output():
@@ -214,6 +214,41 @@ def cmd_backup(mnemos, args):
         return
     dest = mnemos.store.backup(args.dest)
     print(f"WAL-safe snapshot written: {dest}")
+
+
+def cmd_move(args):
+    """Relocate the store file. Runs without a Mnemos instance: the CLI's own
+    connection would hold the lock the move needs."""
+    import sqlite3
+    from .storage.move import StoreBusyError, move_database
+    src = args.db or DEFAULT_DB_PATH
+    try:
+        result = move_database(src, args.dest, link=not args.no_link)
+    except StoreBusyError as e:
+        print(f"refused: {e}", file=sys.stderr)
+        sys.exit(1)
+    except (OSError, RuntimeError, sqlite3.Error) as e:
+        print(f"move failed: {e}", file=sys.stderr)
+        sys.exit(1)
+    if args.json:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return
+    if result["status"] == "already-there":
+        print(f"Already at {result['dest']}, nothing to do.")
+        return
+    print(f"Moved {result['source']} -> {result['dest']} "
+          f"({result['tables']} tables, {result['rows']} rows verified)")
+    print(f"Old file kept as {result['kept']}; delete it once the new location is confirmed.")
+    if result["journal_mode"] == "wal":
+        print("The kept file is now in rollback-journal mode, so a process that still "
+              "holds it gets an error instead of writing into it.")
+    if result["link"]:
+        print(f"Symlink left at {result['link']} so a stale config still reaches the store.")
+    elif result["link_error"]:
+        print(f"WARNING: no symlink at the old path ({result['link_error']}). "
+              "Anything still configured with the old path will create an empty database there.")
+    print("Point MNEMOS_DB at the new location wherever it is set:")
+    print(f"  export MNEMOS_DB={result['dest']}")
 
 
 def cmd_doctor(mnemos, args):
@@ -476,6 +511,17 @@ def main(argv=None):
     p.add_argument("dest", help="Destination path for the snapshot")
     p.set_defaults(fn=cmd_backup)
 
+    # move
+    p = sub.add_parser("move",
+                       help="Relocate the store safely: refuses while it is in use, verifies the copy, "
+                            "keeps the old file and leaves a symlink (use instead of `mv` on a live DB)")
+    p.add_argument("dest", help="New path, or an existing directory (the file name is kept)")
+    p.add_argument("--db", help="Database to move (default: MNEMOS_DB). Works on any SQLite file")
+    p.add_argument("--no-link", action="store_true",
+                   help="Do not leave a symlink at the old path")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_move, needs_store=False)
+
     # doctor
     p = sub.add_parser("doctor", help="Health check (and optional self-repair of schema drift)")
     p.add_argument("--migrate", action="store_true",
@@ -524,6 +570,9 @@ def main(argv=None):
     # v10.4.2: honor MNEMOS_NAMESPACE env (the MCP server already does;
     # without this the CLI silently used DEFAULT_NAMESPACE and reported 0
     # for every command on a non-default-namespace database).
+    if not getattr(args, "needs_store", True):
+        args.fn(args)
+        return
     namespace = os.environ.get("MNEMOS_NAMESPACE", DEFAULT_NAMESPACE)
     mnemos = Mnemos(namespace=namespace)
     try:

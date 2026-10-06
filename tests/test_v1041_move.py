@@ -375,22 +375,6 @@ def test_the_destination_keeps_the_sources_permissions(tmp_path):
     assert stat.S_IMODE(os.stat(str(dest)).st_mode) == 0o600
 
 
-@pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() != 0,
-                    reason="changing ownership needs root")
-def test_a_root_run_move_leaves_the_store_with_its_owner(tmp_path):
-    os.chmod(str(tmp_path), 0o755)
-    src = tmp_path / "memory.db"
-    _make_db(str(src), wal=False).close()
-    os.chown(str(src), 65534, 65534)
-    dest = tmp_path / "db" / "memory.db"
-
-    move_database(str(src), str(dest))
-
-    st = os.stat(str(dest))
-    assert (st.st_uid, st.st_gid) == (65534, 65534)
-    assert os.stat(str(tmp_path / "db")).st_uid == 65534
-
-
 def test_a_failed_symlink_is_reported_and_the_move_still_completes(tmp_path, monkeypatch):
     src = tmp_path / "memory.db"
     _make_db(str(src)).close()

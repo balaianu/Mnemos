@@ -6,6 +6,30 @@ before being open-sourced as Mnemos in this repo.
 
 ## [Unreleased]
 
+## [10.41.1] - 2026-10-06 (the mover runs as the store's owner)
+
+### Security
+- **`mnemos move` no longer runs with more privilege than the store's owner.**
+  10.41.0 let root move a store owned by another user and then chown the copy
+  to that user. Every path such a move touches sits in a directory the user
+  controls, so the user could swap a path for a symlink between two steps and
+  have root write, chown or chmod a file of their choosing. The caller must
+  now own the store, root included: run `sudo -u OWNER mnemos move ...`. The
+  refusal exits 1 and names the owning uid. Run as the owner, the kernel
+  enforces the owner's permissions on every step.
+- Root moving a root-owned store refuses a source or destination directory
+  another user can write: one not owned by root, world-writable,
+  group-writable for a group other than root's, or carrying a POSIX ACL.
+- **The copy in progress is private.** It is created with mode 0600,
+  exclusively and without following a symlink, before SQLite opens it; the
+  source's permissions and group are applied through the file descriptor once
+  the copy is verified. In 10.41.0 it was created with the default umask and
+  was readable by others until the final chmod.
+
+### Changed
+- Directories the move creates are no longer chowned; the owner creates them.
+- Tests: `tests/test_v1041_1_move_hardening.py` (4). 515 pass.
+
 ## [10.41.0] - 2026-10-06 (move a store safely)
 
 This update is for when you want to move your database somewhere else, since

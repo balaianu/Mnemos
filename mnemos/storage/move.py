@@ -10,9 +10,17 @@ Moving a live SQLite file with `mv` is how stores get lost:
 
 move_database() closes all three. It refuses while it can see anyone else on
 the store, copies through the backup API under SQLite's exclusive lock,
-verifies the copy, gives it the source's owner and permissions, keeps the
-source as a rollback file, and swaps a symlink onto the old path in one atomic
+verifies the copy, gives it the source's permissions, keeps the source as a
+rollback file, and swaps a symlink onto the old path in one atomic
 step so a stale config still reaches the real store.
+
+The caller must own the store, root included (v10.41.1). Every path the move
+touches sits in a directory the store's owner controls, so a privileged mover
+could be made to write, chown or chmod a file of that owner's choosing by
+swapping a path for a symlink between two steps. Run as the owner, the kernel
+enforces the owner's permissions on every step and there is nothing to
+escalate to. Root moving its own store refuses any directory another user can
+write, for the same reason.
 
 The mover is schema-agnostic. It never loads an extension and never opens the
 file as a Mnemos store, so it relocates any SQLite database, not only memory.db.
@@ -120,13 +128,39 @@ def _free_name(base: str) -> str:
     return name
 
 
-def _give_owner(path: str, st: os.stat_result) -> None:
-    # A root-run move must not hand a user's store to root. Without the
-    # privilege to chown, the file stays with whoever ran the move.
+def _others_can_write(directory: str) -> bool:
+    st = os.stat(directory)
+    if st.st_uid != 0 or st.st_mode & 0o002:
+        return True
+    if st.st_mode & 0o020 and st.st_gid != 0:
+        return True
     try:
-        os.chown(path, st.st_uid, st.st_gid)
+        # A POSIX ACL can grant write access the mode bits do not show.
+        return "system.posix_acl_access" in os.listxattr(directory)
     except (AttributeError, OSError):
-        pass
+        return False
+
+
+def _check_caller(real_src: str, src_stat: os.stat_result, dest: str) -> None:
+    """Refuse a move that would run with more privilege than the store's owner
+    has over the directories involved. See the module docstring."""
+    if not hasattr(os, "geteuid"):
+        return
+    euid = os.geteuid()
+    if src_stat.st_uid != euid:
+        raise PermissionError(
+            f"{real_src} belongs to uid {src_stat.st_uid}; run the move as that "
+            f"user (this process is uid {euid}).")
+    if euid != 0:
+        return
+    anchor = os.path.dirname(dest)
+    while not os.path.isdir(anchor):
+        anchor = os.path.dirname(anchor)
+    for directory in (os.path.dirname(real_src), anchor):
+        if _others_can_write(directory):
+            raise PermissionError(
+                f"refusing to move a root-owned store through {directory}: "
+                "another user can write there.")
 
 
 def move_database(src: str, dest: str, link: bool = True,
@@ -140,7 +174,8 @@ def move_database(src: str, dest: str, link: bool = True,
     None), link_error and journal_mode.
 
     Raises FileNotFoundError (no source), FileExistsError (dest taken),
-    StoreBusyError (store in use), sqlite3.Error (not a database) or
+    PermissionError (the caller does not own the store, or root would work in
+    a directory another user can write), StoreBusyError (store in use), sqlite3.Error (not a database) or
     RuntimeError (the copy failed verification). On any failure the source is
     unchanged and nothing is left at dest.
     """
@@ -169,10 +204,12 @@ def move_database(src: str, dest: str, link: bool = True,
             "Stop it and retry.")
 
     src_stat = os.stat(real_src)
+    _check_caller(real_src, src_stat, dest)
     conn = sqlite3.connect(real_src, timeout=timeout, isolation_level=None)
     tmp = dest + ".moving"
     created_dirs: List[str] = []
     left_wal = False
+    tmp_fd = None
     try:
         try:
             # In exclusive locking mode the file lock is taken on first use and
@@ -194,10 +231,13 @@ def move_database(src: str, dest: str, link: bool = True,
 
         created_dirs = _missing_dirs(os.path.dirname(dest))
         os.makedirs(os.path.dirname(dest), exist_ok=True)
-        for d in created_dirs:
-            _give_owner(d, src_stat)
 
+        # Created private and exclusively, before SQLite opens it: the copy is
+        # never readable by others, and a symlink planted at this name is not
+        # followed. Mode and group go on through the descriptor at the end.
         _remove_quiet(tmp)
+        tmp_fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                         | getattr(os, "O_NOFOLLOW", 0), 0o600)
         out = sqlite3.connect(tmp)
         try:
             conn.backup(out)
@@ -218,8 +258,16 @@ def move_database(src: str, dest: str, link: bool = True,
             raise RuntimeError(f"copy differs from source in tables: {diff}")
         for ext in ("-wal", "-shm"):
             _remove_quiet(tmp + ext)
-        os.chmod(tmp, stat.S_IMODE(src_stat.st_mode))
-        _give_owner(tmp, src_stat)
+        if hasattr(os, "fchmod"):
+            try:
+                os.fchown(tmp_fd, -1, src_stat.st_gid)
+            except OSError:
+                pass  # not a member of the source's group; the copy keeps ours
+            os.fchmod(tmp_fd, stat.S_IMODE(src_stat.st_mode))
+        else:
+            os.chmod(tmp, stat.S_IMODE(src_stat.st_mode))
+        os.close(tmp_fd)
+        tmp_fd = None
 
         if os.path.lexists(dest):
             raise FileExistsError(f"destination already exists: {dest}")
@@ -238,6 +286,8 @@ def move_database(src: str, dest: str, link: bool = True,
             except sqlite3.Error:
                 pass
         conn.close()
+        if tmp_fd is not None:
+            os.close(tmp_fd)
         for leftover in (tmp, tmp + "-wal", tmp + "-shm"):
             _remove_quiet(leftover)
         for d in reversed(created_dirs):

@@ -127,7 +127,8 @@ def cmd_tags(mnemos, args):
 
 
 def cmd_briefing(mnemos, args):
-    print(mnemos.briefing(project=args.project, budget_chars=args.budget))
+    print(mnemos.briefing(project=args.project, budget_chars=args.budget,
+                          valid_only=not args.include_expired))
 
 
 def cmd_digest(mnemos, args):
@@ -442,6 +443,8 @@ def main(argv=None):
     p = sub.add_parser("briefing", help="Compact session-start briefing (~370 tokens)")
     p.add_argument("--project", "-p")
     p.add_argument("--budget", type=int, default=1300, help="Char budget (default 1300)")
+    p.add_argument("--include-expired", action="store_true",
+                   help="Also list memories whose validity window has passed or not started")
     p.set_defaults(fn=cmd_briefing)
 
     # digest

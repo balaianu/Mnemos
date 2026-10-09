@@ -379,8 +379,10 @@ class MnemosStore(ABC):
         namespace: str,
         project: Optional[str] = None,
         limit: int = 30,
+        valid_only: bool = True,
     ) -> list:
         """Return top memories by importance + recency for briefing.
+        valid_only restricts to memories whose validity window covers today.
 
         Returns list of dicts with keys: id, project, content, importance,
         type. Default implementation returns an empty list.

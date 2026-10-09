@@ -1569,6 +1569,7 @@ class SQLiteStore(MnemosStore):
         namespace: str,
         project: Optional[str] = None,
         limit: int = 30,
+        valid_only: bool = True,
     ) -> list:
         conn = self._get_conn()
         where = "WHERE m.status = 'active' AND m.namespace = ?"
@@ -1576,6 +1577,9 @@ class SQLiteStore(MnemosStore):
         if project:
             where += " AND m.project = ?"
             params.append(project)
+        if valid_only:
+            where += (" AND (m.valid_until IS NULL OR m.valid_until > date('now', 'localtime'))"
+                      " AND (m.valid_from IS NULL OR m.valid_from <= date('now', 'localtime'))")
         try:
             rows = conn.execute(
                 f"SELECT id, project, content, importance, type "

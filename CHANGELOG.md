@@ -6,6 +6,20 @@ before being open-sourced as Mnemos in this repo.
 
 ## [Unreleased]
 
+## [10.42.2] - 2026-10-09 (the briefing forgets what has expired)
+
+### Fixed
+- **`briefing` honours validity like every search surface.** `get_briefing_memories`
+  filtered on `status='active'` only, so a memory retired with `valid_until`
+  (how a self trait that stopped being true is recorded since 10.42.0) or
+  scheduled with a future `valid_from` still opened every session. The
+  briefing now applies the same `valid_only=True` default that search got in
+  10.40.0; `Mnemos.briefing(valid_only=False)` and `mnemos briefing
+  --include-expired` return the history. Found 2026-10-09 while reviewing how
+  the Claude Code session hook loads the self namespace; on the live store 46
+  active memories with a past `valid_until` were eligible for the briefing.
+  3 new tests.
+
 ## [10.42.1] - 2026-10-09 (a client that never says hello)
 
 ### Fixed

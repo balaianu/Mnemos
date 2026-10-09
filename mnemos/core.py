@@ -1548,17 +1548,19 @@ class Mnemos:
             return cut[:pos] + " …"
         return cut + "…"
 
-    def briefing(self, project: Optional[str] = None, budget_chars: int = 1300) -> str:
+    def briefing(self, project: Optional[str] = None, budget_chars: int = 1300,
+                 valid_only: bool = True) -> str:
         """Compact session-start briefing of top memories by importance + recency.
 
         Returns a markdown string fitting roughly `budget_chars` characters.
         Designed to be injected into AI session context (~370 tokens at default).
         Per-entry truncation uses sentence-aware boundaries with an ellipsis
         marker so lines that got cut off read cleanly rather than dangling
-        mid-sentence.
+        mid-sentence. Only currently valid memories by default, like search;
+        valid_only=False includes expired and not-yet-valid ones.
         """
         rows = self.store.get_briefing_memories(
-            self.namespace, project=project, limit=30)
+            self.namespace, project=project, limit=30, valid_only=valid_only)
 
         lines = []
         used = 0

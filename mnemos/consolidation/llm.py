@@ -43,6 +43,8 @@ import time
 import urllib.request
 import urllib.error
 
+from ..constants import llm_max_tokens
+
 
 DEFAULT_API_URL = "https://api.openai.com/v1/chat/completions"
 DEFAULT_MODEL = None
@@ -126,7 +128,7 @@ def _log(msg):
 _TEMP_REJECTED = set()
 
 
-def chat(messages, max_tokens=1024, temperature=0.3, fast=False, phase=None, timeout=None):
+def chat(messages, max_tokens=None, temperature=0.3, fast=False, phase=None, timeout=None):
     """Call an OpenAI-compatible chat completions endpoint.
 
     Returns the response content string, or None on any failure (no LLM
@@ -134,7 +136,8 @@ def chat(messages, max_tokens=1024, temperature=0.3, fast=False, phase=None, tim
 
     Args:
         messages: list of {"role": ..., "content": ...} dicts
-        max_tokens: max response tokens
+        max_tokens: completion roof; None = llm_max_tokens(phase) (MNEMOS_LLM_MAX_TOKENS[_<PHASE>],
+               default 10000). A failsafe against a runaway, not a budget to tune per call.
         temperature: sampling temperature; None = do not send the parameter
                (portable across model families that reject it)
         fast: use the fast/cheap model instead of the main model
@@ -162,6 +165,8 @@ def chat(messages, max_tokens=1024, temperature=0.3, fast=False, phase=None, tim
     if not model:
         return None
 
+    if max_tokens is None:
+        max_tokens = llm_max_tokens(phase)
     payload = {
         "model": model,
         "messages": messages,
@@ -235,13 +240,13 @@ def chat(messages, max_tokens=1024, temperature=0.3, fast=False, phase=None, tim
 # Backwards-compat aliases for the Nyx cycle phase code.
 # All three now accept the optional `phase` parameter to route to
 # MNEMOS_LLM_MODEL_<PHASE> when set, falling back to the global model.
-def haiku_chat(messages, max_tokens=256, temperature=0.3, phase=None, timeout=None):
+def haiku_chat(messages, max_tokens=None, temperature=0.3, phase=None, timeout=None):
     return chat(messages, max_tokens=max_tokens, temperature=temperature, fast=True, phase=phase, timeout=timeout)
 
 
-def sonnet_chat(messages, max_tokens=1024, temperature=0.3, phase=None, timeout=None):
+def sonnet_chat(messages, max_tokens=None, temperature=0.3, phase=None, timeout=None):
     return chat(messages, max_tokens=max_tokens, temperature=temperature, fast=False, phase=phase, timeout=timeout)
 
 
-def opus_chat(messages, max_tokens=2048, temperature=0.3, phase=None, timeout=None):
+def opus_chat(messages, max_tokens=None, temperature=0.3, phase=None, timeout=None):
     return chat(messages, max_tokens=max_tokens, temperature=temperature, fast=False, phase=phase, timeout=timeout)

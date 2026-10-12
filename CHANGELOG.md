@@ -6,6 +6,23 @@ before being open-sourced as Mnemos in this repo.
 
 ## [Unreleased]
 
+## [10.42.4] - 2026-10-12 (one roof, no budgets)
+
+### Changed
+- **Every consolidation LLM call shares one completion roof.** The weave and
+  contradiction-judge calls still pinned `max_tokens=256`, the dedup
+  classifier in `core.py` pinned 16, and 10.42.3 had only lifted synthesis.
+  Measured on real pairs 2026-10-12: weave on Haiku 5.5 uses 557-799
+  completion tokens, the judge on Opus 5.5 305-524, so both would have
+  returned `finish_reason=length` with no content on the next weekly run. The
+  roof is `MNEMOS_LLM_MAX_TOKENS` (default 10 000), per phase
+  `MNEMOS_LLM_MAX_TOKENS_<PHASE>`; `chat()` and the `haiku/sonnet/opus_chat`
+  helpers default to it when no `max_tokens` is passed, the merge path uses
+  `max(roof, total_chars)`. It is a failsafe against a runaway reply, not a
+  budget to tune per call (Mikael: "token usage could just be a high roof so
+  it doesn't run away completely"). `SYNTHESIS_MAX_TOKENS` stays as the
+  SYNTHESIZE phase's resolved roof.
+
 ## [10.42.3] - 2026-10-12 (synthesis has a budget a reasoning model can live in)
 
 ### Fixed

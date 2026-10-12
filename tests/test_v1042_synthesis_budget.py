@@ -1,4 +1,4 @@
-"""10.42.3: the synthesis budget is configurable and a budget-exhausted reply is logged."""
+"""10.42.3/10.42.4: one completion roof for every consolidation call, per-phase override, length-exhausted replies logged."""
 import importlib
 import io
 import json
@@ -15,22 +15,59 @@ def _fake_response(payload):
     return _Resp(json.dumps(payload).encode("utf-8"))
 
 
-class TestSynthesisBudget:
-    def test_default_budget_is_4096(self, monkeypatch):
-        monkeypatch.delenv("MNEMOS_LLM_MAX_TOKENS_SYNTHESIZE", raising=False)
+def _llm_env(monkeypatch):
+    monkeypatch.setenv("MNEMOS_LLM_API_KEY", "x")
+    monkeypatch.setenv("MNEMOS_LLM_MODEL", "claude-test")
+    monkeypatch.setenv("MNEMOS_LLM_API_URL", "https://example.invalid/v1/chat/completions")
+
+
+def _sent_payload(monkeypatch, call):
+    """Run `call` against a fake endpoint and return the JSON payload it sent."""
+    from mnemos.consolidation import llm
+    seen = {}
+
+    def fake_urlopen(req, timeout=None):
+        seen["payload"] = json.loads(req.data.decode("utf-8"))
+        return _fake_response({"choices": [{"finish_reason": "stop",
+                                            "message": {"role": "assistant", "content": "ok"}}]})
+
+    with mock.patch.object(llm.urllib.request, "urlopen", side_effect=fake_urlopen):
+        call(llm)
+    return seen["payload"]
+
+
+class TestRoof:
+    def test_default_roof_is_10000(self, monkeypatch):
+        for k in ("MNEMOS_LLM_MAX_TOKENS", "MNEMOS_LLM_MAX_TOKENS_SYNTHESIZE", "MNEMOS_LLM_MAX_TOKENS_WEAVE"):
+            monkeypatch.delenv(k, raising=False)
         import mnemos.constants as c
         importlib.reload(c)
-        assert c.SYNTHESIS_MAX_TOKENS == 4096
+        assert c.LLM_MAX_TOKENS == 10000
+        assert c.llm_max_tokens() == 10000
+        assert c.llm_max_tokens("WEAVE") == 10000
+        assert c.SYNTHESIS_MAX_TOKENS == 10000
 
-    def test_env_override(self, monkeypatch):
-        monkeypatch.setenv("MNEMOS_LLM_MAX_TOKENS_SYNTHESIZE", "8192")
-        import mnemos.constants as c
-        importlib.reload(c)
-        assert c.SYNTHESIS_MAX_TOKENS == 8192
-        monkeypatch.delenv("MNEMOS_LLM_MAX_TOKENS_SYNTHESIZE")
-        importlib.reload(c)
+    def test_global_and_phase_override(self, monkeypatch):
+        monkeypatch.setenv("MNEMOS_LLM_MAX_TOKENS", "6000")
+        monkeypatch.setenv("MNEMOS_LLM_MAX_TOKENS_CONTRADICT", "3000")
+        from mnemos.constants import llm_max_tokens
+        assert llm_max_tokens() == 6000
+        assert llm_max_tokens("WEAVE") == 6000
+        assert llm_max_tokens("CONTRADICT") == 3000
+        assert llm_max_tokens("contradict") == 3000
 
-    def test_phase5_passes_budget_to_llm(self, monkeypatch):
+    def test_chat_sends_the_roof_when_no_budget_given(self, monkeypatch):
+        _llm_env(monkeypatch)
+        monkeypatch.setenv("MNEMOS_LLM_MAX_TOKENS", "7777")
+        monkeypatch.setenv("MNEMOS_LLM_MAX_TOKENS_WEAVE", "4444")
+        p = _sent_payload(monkeypatch, lambda llm: llm.haiku_chat([{"role": "user", "content": "hi"}]))
+        assert p["max_tokens"] == 7777
+        p = _sent_payload(monkeypatch, lambda llm: llm.opus_chat([{"role": "user", "content": "hi"}], phase="WEAVE"))
+        assert p["max_tokens"] == 4444
+        p = _sent_payload(monkeypatch, lambda llm: llm.chat([{"role": "user", "content": "hi"}], max_tokens=12))
+        assert p["max_tokens"] == 12
+
+    def test_phase5_passes_roof_to_llm(self, monkeypatch):
         from mnemos.consolidation import phases
         seen = {}
 
@@ -45,13 +82,18 @@ class TestSynthesisBudget:
         assert seen["max_tokens"] == phases.SYNTHESIS_MAX_TOKENS
         assert stats["insights_generated"] == 0
 
+    def test_no_call_site_pins_a_small_budget(self):
+        import inspect
+
+        from mnemos.consolidation import phases
+        src = inspect.getsource(phases)
+        assert "max_tokens=256" not in src and "max_tokens=1024" not in src
+
 
 class TestLengthFinishIsLogged:
     def _run(self, monkeypatch, capsys, content):
         from mnemos.consolidation import llm
-        monkeypatch.setenv("MNEMOS_LLM_API_KEY", "x")
-        monkeypatch.setenv("MNEMOS_LLM_MODEL", "claude-test")
-        monkeypatch.setenv("MNEMOS_LLM_API_URL", "https://example.invalid/v1/chat/completions")
+        _llm_env(monkeypatch)
         payload = {"choices": [{"finish_reason": "length",
                                 "message": {"role": "assistant", "content": content}}]}
         with mock.patch.object(llm.urllib.request, "urlopen", return_value=_fake_response(payload)):

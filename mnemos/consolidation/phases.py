@@ -48,7 +48,7 @@ from ..constants import (
     NYX_CONTRADICT_FINDER_DEFAULT, NLI_FINDER_THRESHOLD, NLI_FINDER_MAX_PAIRS,
     TIGHT_THRESHOLD, TOPIC_THRESHOLD, WEAVE_MIN_SIMILARITY, WEAVE_TOP_K,
     NYX_PACKET_SIZE, NORMAL_MAX_CALLS, SURGE_MAX_CALLS, SURGE_THRESHOLD,
-    SYNTHESIS_MAX_TOKENS,
+    SYNTHESIS_MAX_TOKENS, llm_max_tokens,
     MERGE_ENGINE_DEFAULT, CLUSTER_GATE_DEFAULT, CLUSTER_GATE_TAU,
     CLUSTER_GATE_MAX_LINES, CANDIDACY_DEFAULT, CANDIDACY_TOP_K,
     WEAVE_NOVELTY_TAU,
@@ -457,7 +457,7 @@ def merge_cluster(cluster_ids, mem_by_id):
                     {"role": "system", "content": _merge_prompt()},
                     {"role": "user", "content": user_msg},
                 ],
-                max_tokens=max(1024, total_chars),
+                max_tokens=max(llm_max_tokens("MERGE"), total_chars),
                 temperature=0.3,
                 phase="MERGE",
             )
@@ -977,7 +977,6 @@ def phase_weave(conn, all_embeddings, mem_by_id, is_surge, execute=False):
                 {"role": "system", "content": WEAVE_SYSTEM},
                 {"role": "user", "content": prompt},
             ],
-            max_tokens=256,
             temperature=0.3,
             phase="WEAVE",
         )
@@ -1406,7 +1405,6 @@ def phase_contradict(conn, mergeable_embeddings, mem_by_id, is_surge,
                 {"role": "system", "content": CONTRADICT_SYSTEM},
                 {"role": "user", "content": prompt},
             ],
-            max_tokens=256,
             temperature=0.3,
             phase="CONTRADICT",
         )

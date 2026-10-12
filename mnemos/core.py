@@ -859,7 +859,7 @@ class Mnemos:
                         "Classification:"
                     )},
                 ]
-                response = chat(msgs, max_tokens=16, temperature=0.0)
+                response = chat(msgs, temperature=0.0)  # roof from llm_max_tokens(); 16 starved a reasoning model
                 if response:
                     # Be defensive about whitespace-only or punctuation-only
                     # responses: .split()[0] would IndexError on "" / "\n".

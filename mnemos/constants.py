@@ -221,10 +221,24 @@ WEAVE_MIN_SIMILARITY = float(os.environ.get("MNEMOS_WEAVE_MIN_SIMILARITY", "0.55
 WEAVE_TOP_K = int(os.environ.get("MNEMOS_WEAVE_TOP_K", "3"))
 # Phase 5 synthesis packet size
 NYX_PACKET_SIZE = int(os.environ.get("MNEMOS_NYX_PACKET_SIZE", "25"))
-# Completion budget for the phase-5 synthesis call. Claude 5.x models spend
-# reasoning tokens inside max_tokens on the OpenAI-compat endpoint; 1024 left
-# Fable 5.1 with zero visible output (2026-10-12).
-SYNTHESIS_MAX_TOKENS = int(os.environ.get("MNEMOS_LLM_MAX_TOKENS_SYNTHESIZE", "4096"))
+# Completion roof for every consolidation LLM call. A failsafe, not a budget: the model stops when its answer is
+# done and the roof only bites on a runaway. It must leave room for a reasoning model's hidden tokens on the
+# OpenAI-compatible endpoint (measured 2026-10-12: weave on Haiku 5.5 557-799, judge on Opus 5.5 305-524, synthesis
+# on Fable 5.1 ~2000; the old per-call 256 and 1024 returned finish_reason=length with no content).
+# MNEMOS_LLM_MAX_TOKENS_<PHASE> (MERGE, WEAVE, CONTRADICT, SYNTHESIZE) overrides it for one phase.
+LLM_MAX_TOKENS = int(os.environ.get("MNEMOS_LLM_MAX_TOKENS", "10000"))
+
+
+def llm_max_tokens(phase=None):
+    """The completion roof for `phase` (per-phase env first, then the global roof)."""
+    if phase:
+        v = os.environ.get(f"MNEMOS_LLM_MAX_TOKENS_{phase.upper()}")
+        if v:
+            return int(v)
+    return int(os.environ.get("MNEMOS_LLM_MAX_TOKENS", str(LLM_MAX_TOKENS)))
+
+
+SYNTHESIS_MAX_TOKENS = llm_max_tokens("SYNTHESIZE")
 # LLM call budgets per run
 NORMAL_MAX_CALLS = int(os.environ.get("MNEMOS_NORMAL_MAX_CALLS", "30"))
 SURGE_MAX_CALLS = int(os.environ.get("MNEMOS_SURGE_MAX_CALLS", "80"))

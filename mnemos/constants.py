@@ -221,6 +221,10 @@ WEAVE_MIN_SIMILARITY = float(os.environ.get("MNEMOS_WEAVE_MIN_SIMILARITY", "0.55
 WEAVE_TOP_K = int(os.environ.get("MNEMOS_WEAVE_TOP_K", "3"))
 # Phase 5 synthesis packet size
 NYX_PACKET_SIZE = int(os.environ.get("MNEMOS_NYX_PACKET_SIZE", "25"))
+# Completion budget for the phase-5 synthesis call. Claude 5.x models spend
+# reasoning tokens inside max_tokens on the OpenAI-compat endpoint; 1024 left
+# Fable 5.1 with zero visible output (2026-10-12).
+SYNTHESIS_MAX_TOKENS = int(os.environ.get("MNEMOS_LLM_MAX_TOKENS_SYNTHESIZE", "4096"))
 # LLM call budgets per run
 NORMAL_MAX_CALLS = int(os.environ.get("MNEMOS_NORMAL_MAX_CALLS", "30"))
 SURGE_MAX_CALLS = int(os.environ.get("MNEMOS_SURGE_MAX_CALLS", "80"))

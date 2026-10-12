@@ -48,6 +48,7 @@ from ..constants import (
     NYX_CONTRADICT_FINDER_DEFAULT, NLI_FINDER_THRESHOLD, NLI_FINDER_MAX_PAIRS,
     TIGHT_THRESHOLD, TOPIC_THRESHOLD, WEAVE_MIN_SIMILARITY, WEAVE_TOP_K,
     NYX_PACKET_SIZE, NORMAL_MAX_CALLS, SURGE_MAX_CALLS, SURGE_THRESHOLD,
+    SYNTHESIS_MAX_TOKENS,
     MERGE_ENGINE_DEFAULT, CLUSTER_GATE_DEFAULT, CLUSTER_GATE_TAU,
     CLUSTER_GATE_MAX_LINES, CANDIDACY_DEFAULT, CANDIDACY_TOP_K,
     WEAVE_NOVELTY_TAU,
@@ -1590,7 +1591,7 @@ def phase_synthesize(conn, all_embeddings, mem_by_id, execute=False):
             {"role": "system", "content": _synthesis_prompt()},
             {"role": "user", "content": prompt},
         ],
-        max_tokens=1024,
+        max_tokens=SYNTHESIS_MAX_TOKENS,
         temperature=0.5,  # slightly higher for creative synthesis
         phase="SYNTHESIZE",
     )

@@ -197,6 +197,10 @@ def chat(messages, max_tokens=1024, temperature=0.3, fast=False, phase=None, tim
                 if choices:
                     msg = choices[0].get("message") or {}
                     content = msg.get("content") or ""
+                    if choices[0].get("finish_reason") == "length":
+                        _log(f"LLM reply hit max_tokens={max_tokens} on {model}"
+                             + (" with no visible content (reasoning consumed the budget)"
+                                if not content.strip() else ", output truncated"))
                     return content.strip() if content else None
         except urllib.error.HTTPError as e:
             if e.code == 400 and "temperature" in payload:

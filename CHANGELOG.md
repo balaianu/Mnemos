@@ -6,6 +6,21 @@ before being open-sourced as Mnemos in this repo.
 
 ## [Unreleased]
 
+## [10.42.3] - 2026-10-12 (synthesis has a budget a reasoning model can live in)
+
+### Fixed
+- **Phase 5 synthesis no longer starves on `max_tokens=1024`.** Claude 5.x
+  models spend reasoning tokens inside `max_tokens` on the OpenAI-compatible
+  endpoint; with the hardcoded 1024 Fable 5.1 returned `finish_reason=length`
+  and an empty message, Opus 5.5 was cut off mid-insight, and the cycle logged
+  only "Synthesis returned empty". The budget is now `SYNTHESIS_MAX_TOKENS`
+  (env `MNEMOS_LLM_MAX_TOKENS_SYNTHESIZE`, default 4096; the 25-memory packet
+  needed ~1900 on Fable 5.1 and ~1350 on Opus 5.5).
+- **A budget-exhausted reply is logged.** `chat()` now logs
+  `finish_reason=length`, saying whether the content was truncated or absent
+  (reasoning consumed the budget), so the cause is in the log instead of a
+  silent `None`.
+
 ## [10.42.2] - 2026-10-09 (the briefing forgets what has expired)
 
 ### Fixed
